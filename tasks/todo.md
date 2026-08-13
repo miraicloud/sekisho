@@ -10,7 +10,7 @@ merge. Phase B tasks are parallel after A lands.
 ## Phase B — Parallel builds (Sonnet, one agent each)
 - [x] B1. move/: checkpoint + receipt modules — 16/16 `sui move test` pass (verified independently), parity literals confirmed identical to A2 vectors, test helpers correctly `#[test_only]`, PCR lookup by index (fixed from positional), nonce-bound registration implemented
 - [ ] B2. enclave/: axum server, canonical internal schema + hashing, anthropic + openai adapters (streaming accumulation), policy engine, bearer auth, receipt ring buffer, intent serialization matching A2 vectors, cargo test green incl. Rust-side parity test
-- [ ] B3. sdk/: client (both surfaces), Receipt client-side verification against A2 vectors, PTB helper, bun:test offline suite
+- [x] B3. sdk/: 28/28 bun tests + clean tsc build (verified independently); parity test reads A2 vectors from disk (no hardcoded bytes); PTB helper FIXED to chain new_receipt_v1 -> verify (Move takes ReceiptV1 by value; PTBs can't build structs from pure args)
 - [ ] B4. build+ops: Containerfile.eif, Makefile, argonaut boot-config wiring, register_enclave.ts, verify_deployment.ts, CI workflows, .claude/skills runbooks
 
 ## Phase C — Integration + adversarial verification (Fable)
