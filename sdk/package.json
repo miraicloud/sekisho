@@ -1,0 +1,53 @@
+{
+  "name": "@miraicloud/sekisho",
+  "version": "0.1.0",
+  "description": "TypeScript client SDK for Sekisho — an attested AI gateway on Sui Nautilus.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/miraicloud/sekisho",
+    "directory": "sdk"
+  },
+  "keywords": [
+    "sui",
+    "sekisho",
+    "nautilus",
+    "nitro-enclave",
+    "attestation",
+    "ai-gateway",
+    "web3",
+    "blockchain"
+  ],
+  "peerDependencies": {
+    "@mysten/sui": "^2.5.0"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.0.1"
+  },
+  "devDependencies": {
+    "@mysten/sui": "^2.5.0",
+    "@types/bun": "^1.3.9",
+    "typescript": "^5.7.0"
+  }
+}
