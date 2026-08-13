@@ -30,8 +30,16 @@ pub fn authenticate(presented: &str, valid_keys: &[String]) -> bool {
 
 /// Extracts the bearer token from an `Authorization: Bearer <token>` header
 /// value. Returns `None` for any other scheme or malformed header.
+///
+/// The scheme is matched case-insensitively per RFC 7235 §2.1 ("the scheme
+/// name is case-insensitive"), so a client sending `bearer` isn't rejected
+/// with an unexplained 401. The token itself is compared verbatim.
 pub fn extract_bearer(header_value: &str) -> Option<&str> {
-    header_value.strip_prefix("Bearer ").map(str::trim)
+    let (scheme, token) = header_value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("Bearer") {
+        return None;
+    }
+    Some(token.trim())
 }
 
 /// Which caller-key match (if any) authenticated the request. Only the
@@ -77,6 +85,17 @@ mod tests {
         assert_eq!(extract_bearer("Bearer abc123"), Some("abc123"));
         assert_eq!(extract_bearer("Basic abc123"), None);
         assert_eq!(extract_bearer("abc123"), None);
+    }
+
+    #[test]
+    fn extract_bearer_scheme_is_case_insensitive_but_token_is_not() {
+        assert_eq!(extract_bearer("bearer abc123"), Some("abc123"));
+        assert_eq!(extract_bearer("BEARER abc123"), Some("abc123"));
+        assert_eq!(extract_bearer("BeArEr abc123"), Some("abc123"));
+        // The token must survive verbatim — only the scheme is case-folded.
+        assert_eq!(extract_bearer("Bearer AbC123"), Some("AbC123"));
+        // A scheme that merely starts with "bearer" is still rejected.
+        assert_eq!(extract_bearer("Bearerish abc123"), None);
     }
 
     #[test]

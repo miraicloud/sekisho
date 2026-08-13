@@ -212,14 +212,30 @@ impl CompiledPolicy {
                 ));
                 continue;
             }
-            if let Some(cap) = rule.max_tokens
-                && request.max_tokens.is_some_and(|requested| requested > cap)
-            {
-                errors.push(format!(
-                    "{}: max_tokens {:?} exceeds cap {cap}",
-                    rule.name, request.max_tokens
-                ));
-                continue;
+            // An absent max_tokens means "whatever the model will emit", which
+            // is unbounded and therefore exceeds any cap — it must not slip
+            // past the check. max_tokens is required on the Anthropic surface
+            // but optional on the OpenAI-compatible one, so treating None as
+            // "no violation" would let a caller bypass the cap by omitting the
+            // field.
+            if let Some(cap) = rule.max_tokens {
+                match request.max_tokens {
+                    Some(requested) if requested > cap => {
+                        errors.push(format!(
+                            "{}: max_tokens {requested} exceeds cap {cap}",
+                            rule.name
+                        ));
+                        continue;
+                    }
+                    None => {
+                        errors.push(format!(
+                            "{}: request omits max_tokens (unbounded) but the rule caps it at {cap}",
+                            rule.name
+                        ));
+                        continue;
+                    }
+                    Some(_) => {}
+                }
             }
             if let Some(cap) = rule.max_request_bytes
                 && request.request_bytes > cap
@@ -307,6 +323,44 @@ mod tests {
                     request_bytes: 1,
                 })
                 .is_err()
+        );
+    }
+
+    /// Omitting max_tokens must not bypass a cap: it is optional on the
+    /// OpenAI-compatible surface, where absent means "model default", i.e.
+    /// unbounded.
+    #[test]
+    fn max_tokens_cap_denies_a_request_that_omits_max_tokens() {
+        let mut allow = rule("capped");
+        allow.max_tokens = Some(4096);
+        let policy = CompiledPolicy::compile(&doc(vec![allow])).unwrap();
+
+        assert!(
+            policy
+                .evaluate(&EvaluationRequest {
+                    caller_key: "any",
+                    model: "m",
+                    max_tokens: None,
+                    request_bytes: 1,
+                })
+                .is_err()
+        );
+    }
+
+    /// A rule with no cap still accepts an unbounded request.
+    #[test]
+    fn uncapped_rule_allows_a_request_that_omits_max_tokens() {
+        let policy = CompiledPolicy::compile(&doc(vec![rule("uncapped")])).unwrap();
+
+        assert!(
+            policy
+                .evaluate(&EvaluationRequest {
+                    caller_key: "any",
+                    model: "m",
+                    max_tokens: None,
+                    request_bytes: 1,
+                })
+                .is_ok()
         );
     }
 
