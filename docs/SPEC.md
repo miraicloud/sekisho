@@ -49,7 +49,16 @@ cap-gated and sekisho needs **permissionless operator registration**:
   - `register(checkpoint, document: NitroAttestationDocument, ctx)` — **no cap required**: any
     enclave whose attestation PCRs match a non-revoked `PcrSet` registers; shares a
     `Gateway { id, pk: vector<u8>, pcr_version: u64, operator: address, registered_at_ms }`.
-    Attestation parsed/verified in the same PTB via `0x2::nitro_attestation::load_nitro_attestation`.
+    Attestation parsed/verified in the same PTB via `0x2::nitro_attestation::load_nitro_attestation`
+    (an `entry fun` — Move cannot call it; the document arrives by value from a prior PTB command).
+  - **Registration binding (required)**: attestation documents are served publicly at
+    `GET /attestation`, so a bare document is a bearer token — anyone could register someone
+    else's enclave, claim `operator`, then `destroy_gateway` it (denial of service), or spam
+    duplicate Gateways. So `register` asserts `document.nonce()` equals the BCS bytes of
+    `ctx.sender()`: the operator requests an attestation bound to their own address
+    (`POST /attestation` with a nonce) and registration from any other sender aborts
+    (`ENonceNotSender`). `registered_at_ms` comes from `document.timestamp()`, never from a
+    caller argument.
   - Reboot ⇒ new ephemeral key ⇒ re-register (documented runbook; old Gateway destroyable by
     operator).
 - `sekisho::receipt` — receipt verification:
@@ -94,10 +103,18 @@ internal request/response schema before hashing, so the same logical request yie
 Streaming: accumulate SSE deltas into the assembled-response structure, hash that; mid-stream
 refusals/errors still produce receipts with the right `outcome`.
 
+**Provider endpoints are compile-time constants, never config** (load-bearing security property):
+base URLs for each provider are `const` in the source and therefore covered by PCR2. If they came
+from boot config, an operator could point the "anthropic" adapter at a server they control and
+still emit receipts that verify onchain — the attested-relay claim would be worthless. Boot config
+supplies *credentials only*. The outbound HTTPS allowlist is likewise in-image, so any change to
+reachable hosts shows up as a PCR change.
+
 **Policy engine**: onara's compiled-matcher design (JSON policies → Zod-equivalent
 serde validation at boot → precompiled matchers, deny-first then allow-first-match). Rules v1:
-allowed models/providers per caller key, max tokens, request-size caps. The canonical JSON config
-is SHA-256'd → `config_hash` in every Receipt.
+allowed models/providers per caller key, max tokens, request-size caps. `config_hash` = SHA-256
+of the canonical policy JSON **excluding all secrets**, so key rotation doesn't change the
+attested policy identity (and no secret is ever hash-committed).
 
 **Caller auth** (gap onara doesn't cover): bearer API keys, delivered at boot, constant-time
 compared. v1 keeps it simple; capability-object auth is a later extension.
