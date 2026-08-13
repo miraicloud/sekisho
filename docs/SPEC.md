@@ -96,7 +96,9 @@ concurrency bounded by semaphore.
 `POST /v1/chat/completions` (primary) + native Anthropic passthrough `POST /v1/messages`
 (avoids lossy translation of thinking blocks / cache_control). Both canonicalize into ONE
 internal request/response schema before hashing, so the same logical request yields the same
-`request_hash` regardless of entry surface. Plus `GET /attestation`, `GET /health_check`,
+`request_hash` regardless of entry surface. Plus `GET /attestation` (no nonce — for third-party
+verification), `POST /attestation` (body `{ nonce: hex }`, passed through to the NSM attestation
+request — required by the sender-bound registration flow in §3), `GET /health_check`,
 `GET /receipts/:id` (x-receipt-id header on every response; in-memory ring buffer store, no disk).
 
 **Provider adapters**: anthropic, openai-compatible (covers OpenRouter/DeepSeek/self-hosted).
