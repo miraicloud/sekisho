@@ -151,6 +151,22 @@ peerDependency, `$extend`-pattern registration like `@unconfirmed/onara`. Featur
 (both surfaces), client-side Receipt verification (recompute hashes + Ed25519 check against onchain
 Gateway pk), PTB builder for submitting a Receipt to a consuming contract. bun:test, offline.
 
+## 6a. Guidance for consuming contracts
+
+A verified receipt proves *a registered enclave relayed this exact request and returned this exact
+response*. It does not prove more than that, so consumers must handle four things themselves:
+
+1. **Replay** — `verify` is pure; the same receipt verifies forever. Dedupe by `receipt_id`
+   (exposed on `VerifiedReceipt`) in your own table/set before acting on one.
+2. **Request uniqueness** — two callers sending byte-identical requests produce identical
+   `request_hash`. If your contract needs "*this* user asked", have the client include a nonce or
+   their address in the request body so the hash is unique to them, then recompute and compare.
+3. **Timestamps** — `timestamp_ms` is the enclave's clock, which derives from its host and is not
+   consensus time. Treat it as advisory: gate freshness against Sui's `Clock` at submission
+   (e.g. reject receipts older than N minutes) rather than trusting the value itself.
+4. **Content trust** — the provider is still trusted for what the model actually said. The receipt
+   attests faithful relay, not truthful inference.
+
 ## 7. Explicit non-goals (v1)
 
 In-enclave model inference (CPU-only Nitro; router pattern only) · zkTLS · Marlin Oyster (AWS
