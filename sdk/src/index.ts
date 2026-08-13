@@ -9,6 +9,7 @@ export {
   serializeReceiptV1,
   verifyReceipt,
   canonicalJson,
+  hashJson,
   hashRequest,
   hashResponse,
 } from './receipt'

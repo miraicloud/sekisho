@@ -190,6 +190,16 @@ describe('hashRequest / hashResponse', () => {
     expect(h1).not.toBe(h2)
   })
 
+  // Pins a documented limitation rather than a desirable property: JS cannot
+  // tell 1 from 1.0, so canonical JSON here emits `1` where serde_json emits
+  // `1.0`. This is one of the reasons hashing a raw request body cannot
+  // reproduce a receipt's request_hash — clients must rely on verifyReceipt
+  // instead (see hashJson's docs and docs/SPEC.md section 6a).
+  test('canonicalJson cannot distinguish 1 from 1.0 (Rust emits 1.0)', () => {
+    expect(canonicalJson({ temperature: 1.0 })).toBe('{"temperature":1}')
+    expect(canonicalJson({ temperature: 1 })).toBe(canonicalJson({ temperature: 1.0 }))
+  })
+
   test('hashRequest and hashResponse are independent SHA-256 (known test vector)', async () => {
     // SHA-256("null") == 74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b
     const h = await hashRequest(null)

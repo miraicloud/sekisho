@@ -166,6 +166,14 @@ response*. It does not prove more than that, so consumers must handle four thing
    (e.g. reject receipts older than N minutes) rather than trusting the value itself.
 4. **Content trust** — the provider is still trusted for what the model actually said. The receipt
    attests faithful relay, not truthful inference.
+5. **Hashes are commitments, not client-recomputable (v1)** — the gateway hashes its *normalized
+   internal* representation of a request/response, not the JSON body on the wire, so hashing a raw
+   body locally will not reproduce `request_hash`. What a client verifies is the **signature**,
+   which covers every receipt field and proves the enclave committed to those hashes; combined with
+   PCR-verified code, that is the guarantee. Making hashes independently recomputable would require
+   the enclave to publish its canonical form (a candidate for v2, with privacy and memory costs).
+   The SDK's `hashJson` is a general-purpose helper and is documented not to reproduce receipt
+   hashes.
 
 ## 7. Explicit non-goals (v1)
 

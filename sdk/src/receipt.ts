@@ -146,20 +146,31 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 /**
- * SHA-256 of the canonicalized (sorted-key) JSON encoding of a request body —
- * mirrors the enclave's `request_hash`/`upstream_request_hash` computation so
- * a client can independently verify what was hashed into a `ReceiptV1`.
+ * SHA-256 over the canonicalized (sorted-key) JSON encoding of a value.
+ *
+ * **This does NOT reproduce a receipt's `request_hash`.** The gateway hashes
+ * its own normalized internal representation of a request — messages flattened
+ * into canonical blocks, unmodelled content replaced by digests, provider
+ * transforms applied — not the JSON body you sent. Two further mismatches make
+ * raw-body hashing unreliable in principle: JavaScript cannot distinguish
+ * `1` from `1.0` (Rust emits `1.0`, `JSON.stringify` emits `1`), and JS sorts
+ * keys by UTF-16 code unit while Rust sorts by UTF-8 byte, which differ for
+ * astral-plane keys.
+ *
+ * What a client should rely on instead is `verifyReceipt`: the enclave's
+ * signature covers every field of the receipt, so a valid signature proves the
+ * gateway committed to those exact hashes. Recomputing `request_hash` locally
+ * is not supported in v1 (see docs/SPEC.md §6a).
+ *
+ * The helper remains useful for hashing your own content — e.g. committing to
+ * a prompt before sending it, or comparing two payloads.
  */
-export async function hashRequest(request: unknown): Promise<string> {
-  return sha256Hex(new TextEncoder().encode(canonicalJson(request)))
+export async function hashJson(value: unknown): Promise<string> {
+  return sha256Hex(new TextEncoder().encode(canonicalJson(value)))
 }
 
-/**
- * SHA-256 of the canonicalized (sorted-key) JSON encoding of an assembled
- * response body — mirrors the enclave's `response_hash` computation. For
- * streamed responses, pass the fully-accumulated response structure (never
- * raw SSE bytes), matching SPEC.md section 3.
- */
-export async function hashResponse(response: unknown): Promise<string> {
-  return sha256Hex(new TextEncoder().encode(canonicalJson(response)))
-}
+/** @deprecated Misleading name — see {@link hashJson}. Does not reproduce a receipt's `request_hash`. */
+export const hashRequest = hashJson
+
+/** @deprecated Misleading name — see {@link hashJson}. Does not reproduce a receipt's `response_hash`. */
+export const hashResponse = hashJson
