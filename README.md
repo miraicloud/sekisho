@@ -109,7 +109,7 @@ Each check reports PASS or FAIL independently.
 cd enclave && make check   # cargo fmt --check, clippy -D warnings, cargo test
 cd move    && sui move test
 cd sdk     && bun test && bun run build
-bun docs/verify-vectors.ts # receipt bytes still match the pinned vectors
+bun scripts/verify_vectors.ts # receipt bytes still match the pinned vectors
 ```
 
 `docs/receipt-v1-vectors.json` is the contract between the three implementations: Move, Rust, and

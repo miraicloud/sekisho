@@ -25,7 +25,7 @@ const hexToBytes = (h: string) => Uint8Array.from(h.match(/.{2}/g)!.map((b) => p
 const toHex = (b: Uint8Array) => Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('')
 
 const doc = JSON.parse(
-  readFileSync('/Users/bl/Documents/GitHub/miraicloud/sekisho/docs/receipt-v1-vectors.json', 'utf8'),
+  readFileSync(new URL('../docs/receipt-v1-vectors.json', import.meta.url), 'utf8'),
 )
 
 let failures = 0

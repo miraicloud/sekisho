@@ -85,6 +85,34 @@ jobs:
       - name: tsc build
         run: bun run build
 
+  # The cross-boundary test: boots the real gateway binary, takes a signed
+  # receipt off it, and verifies that signature with the SDK. Every workstream
+  # was individually green when this first ran and it still caught two contract
+  # mismatches (receipt_id encoding, missing signing key on /attestation) that
+  # no single-sided unit test could see. Needs no API key or network: it uses
+  # the policy-denial path, which signs a receipt without calling a provider.
+  e2e:
+    name: end-to-end (gateway -> receipt -> SDK verify)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: install sdk deps
+        run: bun install
+        working-directory: sdk
+
+      - name: receipt vectors still match
+        run: bun scripts/verify_vectors.ts
+
+      - name: end-to-end demo
+        run: bun scripts/e2e_demo.ts
+
   # Builds the reproducible EIF twice from a clean checkout and diffs
   # nitro.pcrs -- the actual claim this whole repo makes (docs/SPEC.md sec 5).
   # Marked continue-on-error initially: StageX builds are slow (a full
