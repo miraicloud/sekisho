@@ -1,0 +1,143 @@
+name: CI
+
+# Sekisho runs CI deliberately (a break from the house no-CI norm -- see
+# docs/SPEC.md sec 2). Fast checks (rust, move, sdk) run on every push/PR;
+# the reproducibility job is slow (StageX + a full musl Rust build, twice)
+# and gated to opt-in triggers -- see that job for details.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: enclave
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from enclave/rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          working-directory: enclave
+          components: rustfmt, clippy
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: cargo test --all-targets --locked
+
+  move:
+    name: move (sui move test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: move
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install suiup
+        run: curl -sSfL https://raw.githubusercontent.com/MystenLabs/suiup/main/install.sh | sh
+
+      - name: Add suiup install dir to PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install Sui CLI (testnet channel)
+        run: |
+          suiup install sui@testnet
+          suiup switch sui@testnet
+          sui --version
+
+      - name: sui move test
+        run: sui move test
+
+  sdk:
+    name: sdk (bun test, tsc build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: bun install
+        run: bun install
+
+      - name: bun test
+        run: bun test
+
+      - name: tsc build
+        run: bun run build
+
+  # Builds the reproducible EIF twice from a clean checkout and diffs
+  # nitro.pcrs -- the actual claim this whole repo makes (docs/SPEC.md sec 5).
+  # Marked continue-on-error initially: StageX builds are slow (a full
+  # from-source Rust + Go toolchain bootstrap) and this is new CI plumbing
+  # that may need tuning (BuildKit cache behavior, runner disk space, StageX
+  # registry flakiness) before it's trustworthy as a hard gate. Flip
+  # continue-on-error to false once it's been green for a while.
+  #
+  # Does NOT require Nitro hardware: `docker build` against Containerfile.eif
+  # only needs Docker with BuildKit, same as `make -C enclave eif` locally.
+  # Only *running* the resulting EIF needs a real Nitro Enclaves host.
+  reproducibility:
+    name: reproducibility (double-build + diff PCRs)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: make eif (build 1)
+        working-directory: enclave
+        run: |
+          make eif OUT_DIR=out-a
+
+      - name: make eif (build 2, clean)
+        working-directory: enclave
+        run: |
+          rm -rf out-b
+          make eif OUT_DIR=out-b
+
+      - name: Diff nitro.pcrs between the two builds
+        working-directory: enclave
+        run: |
+          echo "--- build 1 ---"
+          cat out-a/nitro.pcrs
+          echo "--- build 2 ---"
+          cat out-b/nitro.pcrs
+          if diff -u out-a/nitro.pcrs out-b/nitro.pcrs; then
+            echo "PCRs match: build is reproducible."
+          else
+            echo "PCRs differ between two builds of the same commit -- reproducibility broken." >&2
+            exit 1
+          fi
+
+      - name: Upload nitro.pcrs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nitro-pcrs-${{ github.sha }}
+          path: |
+            enclave/out-a/nitro.pcrs
+            enclave/out-b/nitro.pcrs
+          if-no-files-found: warn

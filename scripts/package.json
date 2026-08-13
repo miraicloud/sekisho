@@ -1,0 +1,20 @@
+{
+  "name": "@miraicloud/sekisho-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Operational scripts for Sekisho: enclave registration and reproducible-build verification.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "register": "bun run register_enclave.ts",
+    "verify": "bun run verify_deployment.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mysten/sui": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.9",
+    "typescript": "^5.7.0"
+  }
+}

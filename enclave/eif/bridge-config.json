@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "v0.1",
+  "httpPort": 3000,
+  "httpVsockPort": 3000,
+  "httpTcpPort": 3000,
+  "endpoints": [
+    { "host": "api.anthropic.com", "vsockPort": 8101, "tcpPort": 443, "localPort": 443 },
+    { "host": "api.openai.com", "vsockPort": 8102, "tcpPort": 443, "localPort": 443 },
+    { "host": "openrouter.ai", "vsockPort": 8103, "tcpPort": 443, "localPort": 443 }
+  ]
+}

@@ -1,0 +1,48 @@
+[package]
+name = "sekisho-enclave"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+anyhow = "1.0.102"
+async-stream = "0.3.6"
+axum = "0.8.7"
+bytes = "1.10.1"
+futures-util = "0.3.31"
+hex = "0.4.3"
+nautilus = { git = "https://github.com/unconfirmedlabs/nautilus-rust", rev = "88e6c2094a1e884a019be6336bcdaaba3048a8d3" }
+nautilus-nsm = { git = "https://github.com/unconfirmedlabs/nautilus-rust", rev = "88e6c2094a1e884a019be6336bcdaaba3048a8d3" }
+reqwest = { version = "0.12.15", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+sha2 = "0.10.9"
+subtle = "2.6.1"
+thiserror = "2.0.18"
+tokio = { version = "1.52.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1.19.0", features = ["v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1.3"
+tower = { version = "0.5.2", features = ["util"] }
+wiremock = "0.6.5"
+# Extra tokio features needed only by the raw-socket mid-stream-abort test
+# (server.rs). Feature-unified into the test build only; a plain `cargo
+# build --release` (the EIF build) never pulls in dev-dependencies.
+tokio = { version = "1.52.1", features = ["io-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "symbols"
