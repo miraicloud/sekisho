@@ -1,5 +1,5 @@
 {
-  "description": "Tegata v1 BCS test vectors. Serialization: IntentMessage<TegataV1> = intent(u8) || timestamp_ms(u64 LE) || TegataV1 fields in spec order, BCS-encoded. Move, Rust, and TS implementations MUST reproduce expected_bcs_hex byte-for-byte.",
+  "description": "Receipt v1 BCS test vectors. Serialization: IntentMessage<ReceiptV1> = intent(u8) || timestamp_ms(u64 LE) || ReceiptV1 fields in spec order, BCS-encoded. Move, Rust, and TS implementations MUST reproduce expected_bcs_hex byte-for-byte.",
   "spec": "docs/SPEC.md section 3",
   "vectors": [
     {

@@ -2,17 +2,15 @@
 
 Attested AI gateway for [Sui Nautilus](https://docs.sui.io/guides/developer/nautilus). Sekisho
 runs inside an AWS Nitro Enclave, relays requests to LLM providers (Anthropic, OpenAI-compatible),
-and signs a **Tegata** (手形) — an inference receipt any Sui Move contract can verify.
-
-関所: the Edo-period checkpoint where travelers presented sealed passes for inspection before
-passing through. Deployers run checkpoints; contracts verify tegata.
+and signs an inference **Receipt** that any Sui Move contract can verify. (The name comes from
+the Edo-period checkpoint stations that inspected travelers' papers.)
 
 ## How it works
 
 ```
 client ──► enclave gateway (attested code, PCR-measured) ──► LLM provider
                 │
-                └─► Tegata: signed receipt {config, request, upstream request,
+                └─► signed Receipt: {config, request, upstream request,
                     model, response, usage, outcome} hashes
                          │
                          └─► verified onchain against the Checkpoint registry (Sui)
@@ -36,7 +34,7 @@ Pre-release scaffold. See `docs/SPEC.md` (design) and `tasks/todo.md` (build pla
 
 | Path | Purpose |
 |---|---|
-| `move/` | Move package: `Checkpoint` registry + `Tegata` verification |
+| `move/` | Move package: `Checkpoint` registry + `Receipt` verification |
 | `enclave/` | Rust gateway (axum, Nautilus enclave app) |
 | `sdk/` | `@miraicloud/sekisho` TypeScript SDK |
 | `scripts/` | register / verify deployment scripts (Bun) |
