@@ -19,7 +19,12 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { serializeReceiptV1, verifyReceipt, type ReceiptV1 } from '../sdk/src/receipt'
+import {
+  ReceiptOutcome,
+  serializeReceiptV1,
+  verifyReceipt,
+  type ReceiptV1,
+} from '../sdk/src/receipt'
 import { buildVerifyTransaction } from '../sdk/src/extension'
 
 const REPO = new URL('..', import.meta.url).pathname
@@ -99,7 +104,19 @@ try {
     await fetch(`${base}/receipts/${receiptId}`, { headers: { authorization: `Bearer ${CALLER_KEY}` } })
   ).json()) as any
   const r = record.receipt ?? record
-  check(Number(r.outcome) === 3, 'receipt outcome is 3 (policy_denied)', `outcome=${r.outcome}`)
+  check(
+    Number(r.outcome) === ReceiptOutcome.PolicyDenied,
+    'receipt outcome is 3 (policy_denied)',
+    `outcome=${r.outcome}`,
+  )
+
+  // The gateway's outcome is an untyped number off the wire; narrow it to the
+  // union rather than casting, so an unrecognized code fails loudly here
+  // instead of silently producing a receipt that won't verify.
+  const outcomes = Object.values(ReceiptOutcome) as number[]
+  const rawOutcome = Number(r.outcome)
+  if (!outcomes.includes(rawOutcome)) throw new Error(`unknown receipt outcome ${rawOutcome}`)
+  const outcome = rawOutcome as ReceiptOutcome
 
   const receipt: ReceiptV1 = {
     receiptId: r.receipt_id ?? r.receiptId,
@@ -110,7 +127,7 @@ try {
     responseHash: r.response_hash ?? r.responseHash,
     inputTokens: BigInt(r.input_tokens ?? r.inputTokens),
     outputTokens: BigInt(r.output_tokens ?? r.outputTokens),
-    outcome: Number(r.outcome),
+    outcome,
   }
   const timestampMs = BigInt(record.timestamp_ms ?? record.timestampMs ?? r.timestamp_ms)
   const signatureHex = String(record.signature ?? record.signature_hex)
@@ -122,7 +139,7 @@ try {
   const valid = verifyReceipt(receipt, timestampMs, signatureHex, pubkeyHex)
   check(valid, 'SDK verifies the enclave signature over the receipt')
 
-  const tampered = { ...receipt, outcome: 0 }
+  const tampered: ReceiptV1 = { ...receipt, outcome: ReceiptOutcome.Ok }
   const stillValid = verifyReceipt(tampered, timestampMs, signatureHex, pubkeyHex)
   check(!stillValid, 'tampering with the receipt invalidates the signature')
 
