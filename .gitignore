@@ -1,0 +1,9 @@
+node_modules/
+dist/
+target/
+out/
+build/
+.env
+*.log
+.DS_Store
+.wrangler/

@@ -1,0 +1,23 @@
+# Sekisho build plan
+
+Spec: docs/SPEC.md. Build phases run as Sonnet subagents; Fable verifies adversarially after each
+merge. Phase B tasks are parallel after A lands.
+
+## Phase A — Foundations (sequential, blocks everything)
+- [x] A1. Repo init: git, Apache-2.0 LICENSE, README skeleton (hayabusa README structure), .gitignore, bun workspace, copy research briefs to docs/research/
+- [x] A2. Pin the Tegata v1 BCS layout as a shared test-vector file (docs/tegata-v1-vectors.json): exact bytes for one canonical receipt, used by Move, Rust, and TS parity tests — 2 vectors (191B nominal; 377B refusal + 200-char model forcing 2-byte ULEB + u64::MAX tokens), script-generated
+
+## Phase B — Parallel builds (Sonnet, one agent each)
+- [ ] B1. move/: checkpoint + tegata modules, inline tests incl. test_bcs_parity against A2 vectors, Move.toml (edition 2024), sui move test green
+- [ ] B2. enclave/: axum server, canonical internal schema + hashing, anthropic + openai adapters (streaming accumulation), policy engine, bearer auth, receipt ring buffer, intent serialization matching A2 vectors, cargo test green incl. Rust-side parity test
+- [ ] B3. sdk/: client (both surfaces), Tegata client-side verification against A2 vectors, PTB helper, bun:test offline suite
+- [ ] B4. build+ops: Containerfile.eif, Makefile, argonaut boot-config wiring, register_enclave.ts, verify_deployment.ts, CI workflows, .claude/skills runbooks
+
+## Phase C — Integration + adversarial verification (Fable)
+- [ ] C1. Cross-check: Move/Rust/TS all reproduce A2 vector bytes exactly
+- [ ] C2. Adversarial review: registration permissionlessness abuse, replay, hash canonicalization gaps, streaming edge cases (mid-stream abort, refusal receipts), policy bypass, secret handling
+- [ ] C3. End-to-end dev-mode run: local enclave (no NSM) → real provider call → receipt → SDK verify
+- [ ] C4. README + docs complete, `make check` green everywhere
+
+## Review notes
+(filled in as phases complete)

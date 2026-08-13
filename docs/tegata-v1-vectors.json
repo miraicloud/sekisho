@@ -1,0 +1,44 @@
+{
+  "description": "Tegata v1 BCS test vectors. Serialization: IntentMessage<TegataV1> = intent(u8) || timestamp_ms(u64 LE) || TegataV1 fields in spec order, BCS-encoded. Move, Rust, and TS implementations MUST reproduce expected_bcs_hex byte-for-byte.",
+  "spec": "docs/SPEC.md section 3",
+  "vectors": [
+    {
+      "name": "nominal-success",
+      "fields": {
+        "intent": 0,
+        "timestamp_ms": 1234567890123,
+        "receipt_id": "000102030405060708090a0b0c0d0e0f",
+        "config_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "request_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "upstream_request_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "model_id": "claude-sonnet-5",
+        "response_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "input_tokens": 1000,
+        "output_tokens": 250,
+        "outcome": 0
+      },
+      "field_encoding_note": "receipt_id/config_hash/request_hash/upstream_request_hash/response_hash given as hex; model_id is a UTF-8 string; token counts and timestamp are decimal u64",
+      "byte_length": 191,
+      "expected_bcs_hex": "00cb04fb711f01000010000102030405060708090a0b0c0d0e0f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa20bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb20cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0f636c617564652d736f6e6e65742d3520dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddde803000000000000fa0000000000000000"
+    },
+    {
+      "name": "refusal-long-model-max-tokens",
+      "fields": {
+        "intent": 0,
+        "timestamp_ms": 1735689600000,
+        "receipt_id": "ffffffffffffffffffffffffffffffff",
+        "config_hash": "0101010101010101010101010101010101010101010101010101010101010101",
+        "request_hash": "0202020202020202020202020202020202020202020202020202020202020202",
+        "upstream_request_hash": "0303030303030303030303030303030303030303030303030303030303030303",
+        "model_id": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+        "response_hash": "0404040404040404040404040404040404040404040404040404040404040404",
+        "input_tokens": 18446744073709551615,
+        "output_tokens": 0,
+        "outcome": 1
+      },
+      "field_encoding_note": "receipt_id/config_hash/request_hash/upstream_request_hash/response_hash given as hex; model_id is a UTF-8 string; token counts and timestamp are decimal u64",
+      "byte_length": 377,
+      "expected_bcs_hex": "00007c291f9401000010ffffffffffffffffffffffffffffffff200101010101010101010101010101010101010101010101010101010101010101200202020202020202020202020202020202020202020202020202020202020202200303030303030303030303030303030303030303030303030303030303030303c8016d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d200404040404040404040404040404040404040404040404040404040404040404ffffffffffffffff000000000000000001"
+    }
+  ]
+}
