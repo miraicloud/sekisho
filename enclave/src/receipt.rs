@@ -13,7 +13,6 @@ use std::collections::VecDeque;
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Domain-separator byte for `IntentMessage<ReceiptV1>`. Matches the Move
 /// `RECEIPT_INTENT_V1` constant.
@@ -99,7 +98,13 @@ pub struct StoredReceipt {
 impl StoredReceipt {
     pub fn new(payload: &ReceiptV1, timestamp_ms: u64, signature: &[u8; 64]) -> Self {
         Self {
-            receipt_id: Uuid::from_bytes(payload.receipt_id).to_string(),
+            // Hex, like every other byte field: a client reconstructing the
+            // signed BCS payload from this JSON must decode all byte fields the
+            // same way. A dashed UUID here would be the one special case, and
+            // feeding it to a hex decoder either throws or silently yields the
+            // wrong bytes. `ReceiptStore::get` still accepts the dashed form so
+            // a hand-pasted UUID resolves.
+            receipt_id: hex::encode(payload.receipt_id),
             timestamp_ms,
             config_hash: hex::encode(payload.config_hash),
             request_hash: hex::encode(payload.request_hash),
@@ -142,8 +147,11 @@ impl ReceiptStore {
         entries.push_back(receipt);
     }
 
-    /// Looks up a receipt by its string `receipt_id` (UUID form).
+    /// Looks up a receipt by id. Receipts are stored and served with a hex
+    /// `receipt_id`, but the dashed UUID form is accepted too so an id copied
+    /// out of a log or an older `x-receipt-id` header still resolves.
     pub fn get(&self, receipt_id: &str) -> Option<StoredReceipt> {
+        let wanted = receipt_id.replace('-', "").to_ascii_lowercase();
         let entries = self
             .entries
             .read()
@@ -151,7 +159,7 @@ impl ReceiptStore {
         entries
             .iter()
             .rev()
-            .find(|entry| entry.receipt_id == receipt_id)
+            .find(|entry| entry.receipt_id == wanted)
             .cloned()
     }
 }
@@ -165,6 +173,7 @@ impl Default for ReceiptStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn hash_fill(byte: u8) -> [u8; 32] {
         [byte; 32]
@@ -233,7 +242,8 @@ mod tests {
     fn ring_buffer_evicts_oldest_when_over_capacity() {
         let store = ReceiptStore::new(2);
         let make = |id: [u8; 16]| StoredReceipt {
-            receipt_id: Uuid::from_bytes(id).to_string(),
+            // Hex, as `StoredReceipt::new` produces.
+            receipt_id: hex::encode(id),
             timestamp_ms: 0,
             config_hash: String::new(),
             request_hash: String::new(),
@@ -257,5 +267,33 @@ mod tests {
 
         assert!(store.get(&first_id).is_none());
         assert!(store.get(&third_id).is_some());
+    }
+
+    #[test]
+    fn stored_receipt_id_is_hex_and_lookup_accepts_the_dashed_uuid_form() {
+        let id = [0xab; 16];
+        let payload = ReceiptV1 {
+            receipt_id: id,
+            config_hash: [0; 32],
+            request_hash: [0; 32],
+            upstream_request_hash: [0; 32],
+            model_id: "m".to_owned(),
+            response_hash: [0; 32],
+            input_tokens: 0,
+            output_tokens: 0,
+            outcome: 0,
+        };
+        let stored = StoredReceipt::new(&payload, 0, &[0; 64]);
+
+        // Served as hex, so a client decodes every byte field the same way.
+        assert_eq!(stored.receipt_id, hex::encode(id));
+
+        let store = ReceiptStore::new(4);
+        store.insert(stored);
+
+        assert!(store.get(&hex::encode(id)).is_some());
+        assert!(store.get(&Uuid::from_bytes(id).to_string()).is_some());
+        assert!(store.get(&hex::encode(id).to_ascii_uppercase()).is_some());
+        assert!(store.get(&hex::encode([0x01; 16])).is_none());
     }
 }

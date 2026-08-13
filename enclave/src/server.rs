@@ -162,9 +162,16 @@ async fn health_check(State(state): State<AppState>) -> Json<HealthCheckBody> {
 /// No nonce — for third-party verification (`docs/SPEC.md` §4).
 async fn get_attestation(State(state): State<AppState>) -> Response {
     match state.ctx.attestation(None, None) {
-        Ok(document) => {
-            Json(serde_json::json!({ "attestation": encode_hex(document) })).into_response()
-        }
+        Ok(document) => Json(serde_json::json!({
+            "attestation": encode_hex(document),
+            // Convenience copy of the key the attestation document commits to,
+            // so a client can verify receipt signatures without parsing CBOR.
+            // It is NOT independently trustworthy: a verifier must confirm it
+            // matches the key inside `attestation` (scripts/verify_deployment.ts
+            // does exactly that) before trusting anything signed with it.
+            "public_key": state.ctx.public_key_hex(),
+        }))
+        .into_response(),
         Err(error) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -190,9 +197,16 @@ async fn post_attestation(
         Err(message) => return error_response(StatusCode::BAD_REQUEST, "bad_request", message),
     };
     match state.ctx.attestation(nonce, user_data) {
-        Ok(document) => {
-            Json(serde_json::json!({ "attestation": encode_hex(document) })).into_response()
-        }
+        Ok(document) => Json(serde_json::json!({
+            "attestation": encode_hex(document),
+            // Convenience copy of the key the attestation document commits to,
+            // so a client can verify receipt signatures without parsing CBOR.
+            // It is NOT independently trustworthy: a verifier must confirm it
+            // matches the key inside `attestation` (scripts/verify_deployment.ts
+            // does exactly that) before trusting anything signed with it.
+            "public_key": state.ctx.public_key_hex(),
+        }))
+        .into_response(),
         Err(error) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
@@ -535,7 +549,7 @@ async fn openai_stream_response(
         );
     }
 
-    let receipt_id_header = Uuid::from_bytes(receipt_id).to_string();
+    let receipt_id_header = hex::encode(receipt_id);
 
     let byte_stream = async_stream::stream! {
         let mut acc = openai::StreamAccumulator::new();
@@ -765,7 +779,7 @@ async fn anthropic_stream_response(
         );
     }
 
-    let receipt_id_header = Uuid::from_bytes(receipt_id).to_string();
+    let receipt_id_header = hex::encode(receipt_id);
 
     let byte_stream = async_stream::stream! {
         let mut acc = anthropic::StreamAccumulator::new();
