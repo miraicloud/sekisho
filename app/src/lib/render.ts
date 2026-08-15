@@ -127,7 +127,15 @@ export function renderCertificate(a: Attestation, checks: ChainChecks): Line[] {
   out.push({ text: '    Faithful relay is proven; honest inference is not.', tone: 'bad' })
   out.push({ text: '' })
   out.push({
-    text: `  ! receipts are replayable — dedupe by receipt id ${short(a.receiptId, 10, 6)}`,
+    text: '  ! receipts are replayable — dedupe on the SIGNATURE, or on (gateway, receipt id).',
+    tone: 'bad',
+  })
+  out.push({
+    text: `    receipt id ${short(a.receiptId, 10, 6)} is a nonce, not an identity: it is chosen`,
+    tone: 'bad',
+  })
+  out.push({
+    text: '    by the enclave or client and is not unique across gateways.',
     tone: 'bad',
   })
   out.push({

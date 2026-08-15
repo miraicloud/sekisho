@@ -522,6 +522,38 @@ fn finish_non_streaming_ok(
 
 // --- OpenAI-compatible surface --------------------------------------------
 
+/// Header a client may set to choose the receipt's nonce itself.
+pub const NONCE_HEADER: &str = "x-sekisho-nonce";
+
+/// Resolve the receipt nonce for a request.
+///
+/// `receipt_id` is a *uniqueness nonce*, not the receipt's identity — the
+/// signature is what identifies a receipt, and is what consumers should dedupe
+/// on. Its job is to keep two byte-identical exchanges (same prompt, same
+/// response, same millisecond) from collapsing into one signed payload, which
+/// would undercount paid calls.
+///
+/// A client may supply it via `x-sekisho-nonce` as 32 hex characters. Because
+/// it is covered by the signature, a client-chosen nonce lets the caller prove
+/// which of its own calls a receipt belongs to, and gives the idempotency key
+/// neither Anthropic nor OpenAI offers. Absent the header, the enclave picks a
+/// random v4 UUID as before.
+fn resolve_receipt_id(headers: &HeaderMap) -> Result<[u8; 16], String> {
+    let Some(raw) = headers.get(NONCE_HEADER) else {
+        return Ok(*Uuid::new_v4().as_bytes());
+    };
+    let text = raw
+        .to_str()
+        .map_err(|_| format!("{NONCE_HEADER} must be ASCII hex"))?
+        .trim();
+    let bytes = decode_hex(text).map_err(|_| format!("{NONCE_HEADER} must be valid hex"))?;
+    let exact: [u8; 16] = bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("{NONCE_HEADER} must be exactly 16 bytes (32 hex characters)"))?;
+    Ok(exact)
+}
+
 async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -559,7 +591,10 @@ async fn chat_completions(
             );
         }
     };
-    let receipt_id: [u8; 16] = *Uuid::new_v4().as_bytes();
+    let receipt_id = match resolve_receipt_id(&headers) {
+        Ok(id) => id,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, "bad_request", message),
+    };
     let model_hint = canonical_request.model.clone();
 
     if let Err(denial) = state.config.policy.evaluate(&EvaluationRequest {
@@ -833,7 +868,10 @@ async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes
             );
         }
     };
-    let receipt_id: [u8; 16] = *Uuid::new_v4().as_bytes();
+    let receipt_id = match resolve_receipt_id(&headers) {
+        Ok(id) => id,
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, "bad_request", message),
+    };
     let model_hint = canonical_request.model.clone();
 
     if let Err(denial) = state.config.policy.evaluate(&EvaluationRequest {
@@ -1571,5 +1609,56 @@ mod tests {
         // archived" sentinel.
         assert_ne!(receipt_json["request_blob"], hex::encode([0u8; 32]));
         assert_ne!(receipt_json["response_blob"], hex::encode([0u8; 32]));
+    }
+}
+
+#[cfg(test)]
+mod nonce_tests {
+    use super::*;
+
+    fn headers_with(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(NONCE_HEADER, HeaderValue::from_str(value).unwrap());
+        h
+    }
+
+    #[test]
+    fn absent_header_yields_a_random_nonce() {
+        let a = resolve_receipt_id(&HeaderMap::new()).unwrap();
+        let b = resolve_receipt_id(&HeaderMap::new()).unwrap();
+        assert_ne!(a, b, "each request must get a distinct nonce");
+    }
+
+    #[test]
+    fn client_supplied_nonce_is_used_verbatim() {
+        let id = resolve_receipt_id(&headers_with("000102030405060708090a0b0c0d0e0f")).unwrap();
+        assert_eq!(
+            id,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+            "a client-chosen nonce must reach the signed payload unchanged, or the \
+             caller cannot use it to identify its own call"
+        );
+    }
+
+    #[test]
+    fn client_supplied_nonce_is_stable_across_calls() {
+        let h = headers_with("ffeeddccbbaa99887766554433221100");
+        assert_eq!(
+            resolve_receipt_id(&h).unwrap(),
+            resolve_receipt_id(&h).unwrap()
+        );
+    }
+
+    #[test]
+    fn wrong_length_is_rejected_rather_than_padded() {
+        // Silently padding or truncating would produce a nonce the client did
+        // not choose, defeating the point.
+        assert!(resolve_receipt_id(&headers_with("00010203")).is_err());
+        assert!(resolve_receipt_id(&headers_with(&"ab".repeat(32))).is_err());
+    }
+
+    #[test]
+    fn non_hex_is_rejected() {
+        assert!(resolve_receipt_id(&headers_with("zz0102030405060708090a0b0c0d0e0f")).is_err());
     }
 }

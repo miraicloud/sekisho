@@ -83,6 +83,11 @@ confirms tampering breaks it, and builds the on-chain verification PTB.
 Every inference response yields a receipt — including refusals (which providers return as HTTP
 200) and upstream failures, each with a distinct `outcome` code.
 
+Set `x-sekisho-nonce` (32 hex characters) to choose the receipt's nonce yourself. It is covered by
+the signature, so it proves which of your calls a receipt belongs to and acts as the idempotency
+key neither provider offers. Dedupe receipts on the **signature**, never on `receipt_id` alone —
+see [`docs/SPEC.md`](docs/SPEC.md) §3.
+
 ## Deploying
 
 ```bash

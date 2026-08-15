@@ -73,7 +73,7 @@ cap-gated and sekisho needs **permissionless operator registration**:
 
 | field | type | notes |
 |---|---|---|
-| `receipt_id` | `vector<u8>` (16) | UUID assigned by the enclave |
+| `receipt_id` | `vector<u8>` (16) | **uniqueness nonce, not the receipt's identity** — see below. Client-settable via `x-sekisho-nonce`; otherwise a random v4 UUID |
 | `config_hash` | `vector<u8>` (32) | SHA-256 of canonical policy JSON — policy only, never secrets |
 | `provider` | `u8` | 0 = anthropic, 1 = openai-compatible |
 | `endpoint_host` | `String` | TLS hostname actually validated during the upstream handshake |
@@ -100,6 +100,20 @@ hash would, while additionally addressing them. It is computed locally with `wal
 `0` means "computed but not archived" — a receipt never depends on a storage write succeeding.
 Blobs only, never quilts: a quilt patch is identified by its quilt and offsets rather than by its
 content, so it would not be a commitment.
+
+**`receipt_id` is a nonce, and the signature is the identity.** The signature is unique per
+signed payload, unforgeable, and bound to a registered enclave key; `receipt_id` is a 16-byte
+value the enclave (or the client) chooses. Do not index or dedupe on `receipt_id` alone —
+registration is permissionless, so a hostile operator can replay another gateway's value, and it
+carries no cross-gateway uniqueness guarantee.
+
+What the nonce is actually for: without it, two byte-identical exchanges — same prompt, same
+response, same usage, same millisecond — serialize to identical signed payloads and therefore
+collapse into a single receipt, silently undercounting paid calls. A client may set it via the
+`x-sekisho-nonce` header (32 hex characters). Because it is covered by the signature, a
+client-chosen nonce also proves *which* of the caller's own calls a receipt belongs to, and
+supplies the idempotency key neither Anthropic nor OpenAI offers. Malformed values are rejected
+rather than padded, since a silently altered nonce would defeat the purpose.
 
 **Trust boundary.** A receipt proves what request left the enclave, which TLS peer answered, and
 what came back. It cannot prove the provider ran the model it named — providers do not sign
@@ -198,8 +212,11 @@ Gateway pk), PTB builder for submitting a Receipt to a consuming contract. bun:t
 A verified receipt proves *a registered enclave relayed this exact request and returned this exact
 response*. It does not prove more than that, so consumers must handle four things themselves:
 
-1. **Replay** — `verify` is pure; the same receipt verifies forever. Dedupe by `receipt_id`
-   (exposed on `VerifiedReceipt`) in your own table/set before acting on one.
+1. **Replay** — `verify` is pure; the same receipt verifies forever. Dedupe before acting on one,
+   keyed on the **signature** (unique per signed payload and unforgeable), or failing that on the
+   pair `(gateway, receipt_id)`. Never on `receipt_id` alone: it is an enclave- or client-chosen
+   nonce with no cross-gateway uniqueness, and permissionless registration means another operator
+   can emit the same value.
 2. **Request uniqueness** — two callers sending byte-identical requests produce identical
    `request_hash`. If your contract needs "*this* user asked", have the client include a nonce or
    their address in the request body so the hash is unique to them, then recompute and compare.

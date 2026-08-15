@@ -46,3 +46,9 @@
   on something structural (fixed wire width, explicit prefix), and throw rather than guess. The
   test that caught it was one I wrote to assert the *intended* behaviour, not to probe an edge —
   which is the argument for asserting exact expected values instead of "it returns a bigint".
+
+- **Name a field for what it is, or people will build on what it sounds like.** `receipt_id`
+  sounds like an identity, so the docs told consumers to dedupe on it — but it is an enclave- or
+  client-chosen nonce with no cross-gateway uniqueness, and permissionless registration means a
+  hostile operator can replay another gateway's value. The signature was the correct dedupe key
+  all along. A plausible-sounding name produced a wrong, exploitable instruction.
