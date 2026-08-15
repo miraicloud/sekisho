@@ -6,10 +6,10 @@
 /// check happens once, in `sekisho::checkpoint::register`; every Receipt
 /// thereafter is a single `sui::ed25519::ed25519_verify` call.
 ///
-/// BCS layout (`ReceiptV1` field order) is normative — see SPEC.md section 3 —
-/// and is guarded byte-for-byte by `test_bcs_parity_nominal_success` /
-/// `test_bcs_parity_refusal_long_model_max_tokens` below against
-/// `docs/receipt-v1-vectors.json`.
+/// BCS layout (`Receipt` field order) is normative — see SPEC.md section 3 —
+/// and is guarded byte-for-byte by `bcs_parity_nominal_success` /
+/// `bcs_parity_refusal_unarchived_max_tokens` below against
+/// `docs/receipt-vectors.json`.
 module sekisho::receipt;
 
 use std::bcs;
@@ -21,9 +21,11 @@ use sekisho::checkpoint::{Checkpoint, Gateway};
 
 // === Constants ===
 
-/// Domain-separator intent byte for `ReceiptV1`. Schema evolution is a new
-/// intent byte + new payload struct (`ReceiptV2`), never mutation of this one.
-const RECEIPT_INTENT_V1: u8 = 0;
+/// Domain-separator intent byte for `Receipt`. Schema evolution is a new
+/// intent byte + a new field set, never silent mutation of this one. There is
+/// no `V1`/`V2` in any type name — the schema simply changes until there are
+/// users (see SPEC.md section 3).
+const RECEIPT_INTENT: u8 = 0;
 
 // === Errors ===
 
@@ -36,15 +38,23 @@ const ERevokedGateway: vector<u8> = b"The gateway's PCR version has been revoked
 
 /// The Receipt payload an enclave signs. Field order is normative (BCS) —
 /// see SPEC.md section 3 — and must never change; new fields require a new
-/// intent byte and a new struct (`ReceiptV2`).
-public struct ReceiptV1 has drop {
+/// intent byte.
+public struct Receipt has drop {
     receipt_id: vector<u8>,
     config_hash: vector<u8>,
-    request_hash: vector<u8>,
-    upstream_request_hash: vector<u8>,
+    provider: u8,
+    endpoint_host: String,
+    tls_cert_sha256: vector<u8>,
+    request_blob: u256,
+    upstream_request_blob: u256,
+    upstream_headers_hash: vector<u8>,
     model_id: String,
-    response_hash: vector<u8>,
+    provider_request_id: String,
+    response_blob: u256,
+    provider_meta_hash: vector<u8>,
     input_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
     output_tokens: u64,
     outcome: u8,
 }
@@ -66,11 +76,19 @@ public struct IntentMessage<P: drop> has drop {
 public struct VerifiedReceipt has drop {
     receipt_id: vector<u8>,
     config_hash: vector<u8>,
-    request_hash: vector<u8>,
-    upstream_request_hash: vector<u8>,
+    provider: u8,
+    endpoint_host: String,
+    tls_cert_sha256: vector<u8>,
+    request_blob: u256,
+    upstream_request_blob: u256,
+    upstream_headers_hash: vector<u8>,
     model_id: String,
-    response_hash: vector<u8>,
+    provider_request_id: String,
+    response_blob: u256,
+    provider_meta_hash: vector<u8>,
     input_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
     output_tokens: u64,
     outcome: u8,
 }
@@ -101,11 +119,19 @@ public struct ReceiptVerified has copy, drop {
     pcr_version: u64,
     receipt_id: vector<u8>,
     config_hash: vector<u8>,
-    request_hash: vector<u8>,
-    upstream_request_hash: vector<u8>,
+    provider: u8,
+    endpoint_host: String,
+    tls_cert_sha256: vector<u8>,
+    request_blob: u256,
+    upstream_request_blob: u256,
+    upstream_headers_hash: vector<u8>,
     model_id: String,
-    response_hash: vector<u8>,
+    provider_request_id: String,
+    response_blob: u256,
+    provider_meta_hash: vector<u8>,
     input_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
     output_tokens: u64,
     outcome: u8,
     /// Enclave-reported signing time. Advisory: the enclave's clock derives
@@ -117,28 +143,44 @@ public struct ReceiptVerified has copy, drop {
 
 // === Constructors ===
 
-/// Build a `ReceiptV1` payload. Exposed for tests and for consumers that
+/// Build a `Receipt` payload. Exposed for tests and for consumers that
 /// need to reconstruct the exact payload an enclave should have signed
 /// (e.g. to recompute an expected signature offchain).
-public fun new_receipt_v1(
+public fun new_receipt(
     receipt_id: vector<u8>,
     config_hash: vector<u8>,
-    request_hash: vector<u8>,
-    upstream_request_hash: vector<u8>,
+    provider: u8,
+    endpoint_host: String,
+    tls_cert_sha256: vector<u8>,
+    request_blob: u256,
+    upstream_request_blob: u256,
+    upstream_headers_hash: vector<u8>,
     model_id: String,
-    response_hash: vector<u8>,
+    provider_request_id: String,
+    response_blob: u256,
+    provider_meta_hash: vector<u8>,
     input_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
     output_tokens: u64,
     outcome: u8,
-): ReceiptV1 {
-    ReceiptV1 {
+): Receipt {
+    Receipt {
         receipt_id,
         config_hash,
-        request_hash,
-        upstream_request_hash,
+        provider,
+        endpoint_host,
+        tls_cert_sha256,
+        request_blob,
+        upstream_request_blob,
+        upstream_headers_hash,
         model_id,
-        response_hash,
+        provider_request_id,
+        response_blob,
+        provider_meta_hash,
         input_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
         output_tokens,
         outcome,
     }
@@ -149,20 +191,20 @@ public fun new_receipt_v1(
 /// Verify a Receipt was signed by `gateway`'s registered key, and that the
 /// gateway's PCR version has not since been revoked in `checkpoint`. Aborts
 /// with `ERevokedGateway` or `EInvalidSignature` on failure; on success,
-/// consumes the `ReceiptV1` and returns a `VerifiedReceipt`.
+/// consumes the `Receipt` and returns a `VerifiedReceipt`.
 public fun verify(
     gateway: &Gateway,
     checkpoint: &Checkpoint,
     clock: &Clock,
     timestamp_ms: u64,
-    receipt: ReceiptV1,
+    receipt: Receipt,
     sig: &vector<u8>,
     ctx: &TxContext,
 ): VerifiedReceipt {
     assert!(!checkpoint.is_revoked(gateway.pcr_version()), ERevokedGateway);
 
     let intent_message = IntentMessage {
-        intent: RECEIPT_INTENT_V1,
+        intent: RECEIPT_INTENT,
         timestamp_ms,
         payload: receipt,
     };
@@ -170,14 +212,22 @@ public fun verify(
     assert!(ed25519::ed25519_verify(sig, gateway.pk(), &signed_bytes), EInvalidSignature);
 
     let IntentMessage { payload, .. } = intent_message;
-    let ReceiptV1 {
+    let Receipt {
         receipt_id,
         config_hash,
-        request_hash,
-        upstream_request_hash,
+        provider,
+        endpoint_host,
+        tls_cert_sha256,
+        request_blob,
+        upstream_request_blob,
+        upstream_headers_hash,
         model_id,
-        response_hash,
+        provider_request_id,
+        response_blob,
+        provider_meta_hash,
         input_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
         output_tokens,
         outcome,
     } = payload;
@@ -189,11 +239,19 @@ public fun verify(
         pcr_version: gateway.pcr_version(),
         receipt_id,
         config_hash,
-        request_hash,
-        upstream_request_hash,
+        provider,
+        endpoint_host,
+        tls_cert_sha256,
+        request_blob,
+        upstream_request_blob,
+        upstream_headers_hash,
         model_id,
-        response_hash,
+        provider_request_id,
+        response_blob,
+        provider_meta_hash,
         input_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
         output_tokens,
         outcome,
         timestamp_ms,
@@ -203,11 +261,19 @@ public fun verify(
     VerifiedReceipt {
         receipt_id,
         config_hash,
-        request_hash,
-        upstream_request_hash,
+        provider,
+        endpoint_host,
+        tls_cert_sha256,
+        request_blob,
+        upstream_request_blob,
+        upstream_headers_hash,
         model_id,
-        response_hash,
+        provider_request_id,
+        response_blob,
+        provider_meta_hash,
         input_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
         output_tokens,
         outcome,
     }
@@ -223,24 +289,56 @@ public fun config_hash(receipt: &VerifiedReceipt): vector<u8> {
     receipt.config_hash
 }
 
-public fun request_hash(receipt: &VerifiedReceipt): vector<u8> {
-    receipt.request_hash
+public fun provider(receipt: &VerifiedReceipt): u8 {
+    receipt.provider
 }
 
-public fun upstream_request_hash(receipt: &VerifiedReceipt): vector<u8> {
-    receipt.upstream_request_hash
+public fun endpoint_host(receipt: &VerifiedReceipt): String {
+    receipt.endpoint_host
+}
+
+public fun tls_cert_sha256(receipt: &VerifiedReceipt): vector<u8> {
+    receipt.tls_cert_sha256
+}
+
+public fun request_blob(receipt: &VerifiedReceipt): u256 {
+    receipt.request_blob
+}
+
+public fun upstream_request_blob(receipt: &VerifiedReceipt): u256 {
+    receipt.upstream_request_blob
+}
+
+public fun upstream_headers_hash(receipt: &VerifiedReceipt): vector<u8> {
+    receipt.upstream_headers_hash
 }
 
 public fun model_id(receipt: &VerifiedReceipt): String {
     receipt.model_id
 }
 
-public fun response_hash(receipt: &VerifiedReceipt): vector<u8> {
-    receipt.response_hash
+public fun provider_request_id(receipt: &VerifiedReceipt): String {
+    receipt.provider_request_id
+}
+
+public fun response_blob(receipt: &VerifiedReceipt): u256 {
+    receipt.response_blob
+}
+
+public fun provider_meta_hash(receipt: &VerifiedReceipt): vector<u8> {
+    receipt.provider_meta_hash
 }
 
 public fun input_tokens(receipt: &VerifiedReceipt): u64 {
     receipt.input_tokens
+}
+
+public fun cache_creation_tokens(receipt: &VerifiedReceipt): u64 {
+    receipt.cache_creation_tokens
+}
+
+public fun cache_read_tokens(receipt: &VerifiedReceipt): u64 {
+    receipt.cache_read_tokens
 }
 
 public fun output_tokens(receipt: &VerifiedReceipt): u64 {
@@ -260,65 +358,87 @@ use sui::test_scenario;
 #[test_only]
 use sekisho::checkpoint;
 
-// --- BCS parity vectors (docs/receipt-v1-vectors.json) ---
+// --- BCS parity vectors (docs/receipt-vectors.json) ---
 //
 // Both vectors below are transcribed field-for-field from
-// docs/receipt-v1-vectors.json ("nominal-success" / "refusal-long-model-max-tokens").
-// u64 fields (timestamp_ms/input_tokens/output_tokens) are given as decimal
-// literals here regardless of how the JSON source encodes them, so the JSON's
-// number-vs-string representation has no bearing on these tests.
+// docs/receipt-vectors.json ("nominal-anthropic-success" /
+// "refusal-unarchived-max-tokens"). u64/u256 fields (timestamp_ms,
+// *_tokens, *_blob) are given as decimal/hex literals here regardless of how
+// the JSON source encodes them, so the JSON's number-vs-string
+// representation has no bearing on these tests. `*_blob` fields are u256 and
+// BCS-encode as 32 bytes little-endian; the literals below are palindromic
+// under byte reversal (repeated-byte patterns, or zero), which is why the
+// happy-path signature test doubles as an additional sanity check — see
+// `verify_succeeds_and_exposes_all_fields` below, which round-trips a real
+// Ed25519 signature over these exact bytes.
 
 #[test]
 fun bcs_parity_nominal_success() {
-    let payload = new_receipt_v1(
+    let payload = new_receipt(
         x"000102030405060708090a0b0c0d0e0f",
         x"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        0,
+        b"api.anthropic.com".to_string(),
         x"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        0x1111111111111111111111111111111111111111111111111111111111111111,
+        0x2222222222222222222222222222222222222222222222222222222222222222,
         x"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        b"claude-sonnet-5".to_string(),
+        b"claude-haiku-4-5-20251001".to_string(),
+        b"msg_011Ce3rq3tLXgrQNPLAYKda8".to_string(),
+        0x3333333333333333333333333333333333333333333333333333333333333333,
         x"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        1_000,
-        250,
+        17,
+        0,
+        0,
+        9,
         0,
     );
     let intent_message = IntentMessage {
-        intent: RECEIPT_INTENT_V1,
-        timestamp_ms: 1_234_567_890_123,
+        intent: RECEIPT_INTENT,
+        timestamp_ms: 1_786_767_276_534,
         payload,
     };
     let bytes = bcs::to_bytes(&intent_message);
 
     let expected =
-        x"00cb04fb711f01000010000102030405060708090a0b0c0d0e0f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa20bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb20cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc0f636c617564652d736f6e6e65742d3520dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddde803000000000000fa0000000000000000";
+        x"00f6f9a003a001000010000102030405060708090a0b0c0d0e0f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00116170692e616e7468726f7069632e636f6d20bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222220cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc19636c617564652d6861696b752d342d352d32303235313030311c6d73675f303131436533727133744c586772514e504c41594b646138333333333333333333333333333333333333333333333333333333333333333320dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd110000000000000000000000000000000000000000000000090000000000000000";
 
-    assert_eq!(bytes.length(), 191);
+    assert_eq!(bytes.length(), 361);
     assert_eq!(bytes, expected);
 }
 
 #[test]
-fun bcs_parity_refusal_long_model_max_tokens() {
-    let payload = new_receipt_v1(
+fun bcs_parity_refusal_unarchived_max_tokens() {
+    let payload = new_receipt(
         x"ffffffffffffffffffffffffffffffff",
         x"0101010101010101010101010101010101010101010101010101010101010101",
+        1,
+        b"api.openai.com".to_string(),
         x"0202020202020202020202020202020202020202020202020202020202020202",
+        0,
+        0,
         x"0303030303030303030303030303030303030303030303030303030303030303",
         b"mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm".to_string(),
+        b"".to_string(),
+        0,
         x"0404040404040404040404040404040404040404040404040404040404040404",
         18_446_744_073_709_551_615,
+        18_446_744_073_709_551_615,
+        0,
         0,
         1,
     );
     let intent_message = IntentMessage {
-        intent: RECEIPT_INTENT_V1,
+        intent: RECEIPT_INTENT,
         timestamp_ms: 1_735_689_600_000,
         payload,
     };
     let bytes = bcs::to_bytes(&intent_message);
 
     let expected =
-        x"00007c291f9401000010ffffffffffffffffffffffffffffffff200101010101010101010101010101010101010101010101010101010101010101200202020202020202020202020202020202020202020202020202020202020202200303030303030303030303030303030303030303030303030303030303030303c8016d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d200404040404040404040404040404040404040404040404040404040404040404ffffffffffffffff000000000000000001";
+        x"00007c291f9401000010ffffffffffffffffffffffffffffffff200101010101010101010101010101010101010101010101010101010101010101010e6170692e6f70656e61692e636f6d20020202020202020202020202020202020202020202020202020202020202020200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200303030303030303030303030303030303030303030303030303030303030303c8016d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d000000000000000000000000000000000000000000000000000000000000000000200404040404040404040404040404040404040404040404040404040404040404ffffffffffffffffffffffffffffffff0000000000000000000000000000000001";
 
-    assert_eq!(bytes.length(), 377);
+    assert_eq!(bytes.length(), 506);
     assert_eq!(bytes, expected);
 }
 
@@ -326,31 +446,39 @@ fun bcs_parity_refusal_long_model_max_tokens() {
 //
 // Keypair, message, and signature generated with Bun's `node:crypto` Ed25519
 // support (see scratchpad `gen_ed25519_vector.ts`); the message signed is
-// exactly the "nominal-success" BCS bytes above, so this doubles as an
-// end-to-end signature check over the same payload the parity test guards.
+// exactly the "nominal-anthropic-success" BCS bytes above, so this doubles as
+// an end-to-end signature check over the same payload the parity test guards.
 
 #[test_only]
-const TEST_GATEWAY_PK: vector<u8> = x"87d1373725f4f0035291eb14bdefb52c76e7a9e7463247f5382c2d7ef33ec51d";
+const TEST_GATEWAY_PK: vector<u8> = x"66dbd11baf2bb5cdf65a9b5adc2b89846adb1186cb92ea13039d4616836f26a6";
 #[test_only]
 const TEST_SIG: vector<u8> =
-    x"d3e621b1b29ec24fa4e3fb8ff2f0b3074e82f7acd370a7312fd38855807070cd22ac5bf5e3483e3fed8f60d94380e0847bdaa0dc9d5678ad4263b73237743c05";
+    x"f460dd00bcb22dc496ed5e42b7df7bc32e722a71debd47cceb89077aea9d8b5e83dcfbe6fb78a0cf3b909a61d487bd0c247e71d8b3615b70c618bea94cb3f002";
 #[test_only]
 const TEST_BAD_SIG: vector<u8> =
-    x"d3e621b1b29ec24fa4e3fb8ff2f0b3074e82f7acd370a7312fd38855807070cd22ac5bf5e3483e3fed8f60d94380e0847bdaa0dc9d5678ad4263b73237743cfa";
+    x"f460dd00bcb22dc496ed5e42b7df7bc32e722a71debd47cceb89077aea9d8b5e83dcfbe6fb78a0cf3b909a61d487bd0c247e71d8b3615b70c618bea94cb3f0fa";
 #[test_only]
-const TEST_TIMESTAMP_MS: u64 = 1_234_567_890_123;
+const TEST_TIMESTAMP_MS: u64 = 1_786_767_276_534;
 
 #[test_only]
-fun nominal_receipt_for_testing(): ReceiptV1 {
-    new_receipt_v1(
+fun nominal_receipt_for_testing(): Receipt {
+    new_receipt(
         x"000102030405060708090a0b0c0d0e0f",
         x"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        0,
+        b"api.anthropic.com".to_string(),
         x"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        0x1111111111111111111111111111111111111111111111111111111111111111,
+        0x2222222222222222222222222222222222222222222222222222222222222222,
         x"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        b"claude-sonnet-5".to_string(),
+        b"claude-haiku-4-5-20251001".to_string(),
+        b"msg_011Ce3rq3tLXgrQNPLAYKda8".to_string(),
+        0x3333333333333333333333333333333333333333333333333333333333333333,
         x"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        1_000,
-        250,
+        17,
+        0,
+        0,
+        9,
         0,
     )
 }
@@ -388,15 +516,32 @@ fun verify_succeeds_and_exposes_all_fields() {
 
     assert_eq!(verified.receipt_id(), x"000102030405060708090a0b0c0d0e0f");
     assert_eq!(verified.config_hash(), x"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    assert_eq!(verified.request_hash(), x"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    assert_eq!(verified.provider(), 0);
+    assert_eq!(verified.endpoint_host(), b"api.anthropic.com".to_string());
     assert_eq!(
-        verified.upstream_request_hash(),
+        verified.tls_cert_sha256(),
+        x"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    assert_eq!(verified.request_blob(), 0x1111111111111111111111111111111111111111111111111111111111111111);
+    assert_eq!(
+        verified.upstream_request_blob(),
+        0x2222222222222222222222222222222222222222222222222222222222222222,
+    );
+    assert_eq!(
+        verified.upstream_headers_hash(),
         x"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     );
-    assert_eq!(verified.model_id(), b"claude-sonnet-5".to_string());
-    assert_eq!(verified.response_hash(), x"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
-    assert_eq!(verified.input_tokens(), 1_000);
-    assert_eq!(verified.output_tokens(), 250);
+    assert_eq!(verified.model_id(), b"claude-haiku-4-5-20251001".to_string());
+    assert_eq!(verified.provider_request_id(), b"msg_011Ce3rq3tLXgrQNPLAYKda8".to_string());
+    assert_eq!(verified.response_blob(), 0x3333333333333333333333333333333333333333333333333333333333333333);
+    assert_eq!(
+        verified.provider_meta_hash(),
+        x"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    );
+    assert_eq!(verified.input_tokens(), 17);
+    assert_eq!(verified.cache_creation_tokens(), 0);
+    assert_eq!(verified.cache_read_tokens(), 0);
+    assert_eq!(verified.output_tokens(), 9);
     assert_eq!(verified.outcome(), 0);
 
     clock.destroy_for_testing();

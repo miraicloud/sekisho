@@ -21,9 +21,9 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import {
   ReceiptOutcome,
-  serializeReceiptV1,
+  serializeReceipt,
   verifyReceipt,
-  type ReceiptV1,
+  type Receipt,
 } from '../sdk/src/receipt'
 import { buildVerifyTransaction } from '../sdk/src/extension'
 
@@ -118,28 +118,36 @@ try {
   if (!outcomes.includes(rawOutcome)) throw new Error(`unknown receipt outcome ${rawOutcome}`)
   const outcome = rawOutcome as ReceiptOutcome
 
-  const receipt: ReceiptV1 = {
-    receiptId: r.receipt_id ?? r.receiptId,
-    configHash: r.config_hash ?? r.configHash,
-    requestHash: r.request_hash ?? r.requestHash,
-    upstreamRequestHash: r.upstream_request_hash ?? r.upstreamRequestHash,
-    modelId: r.model_id ?? r.modelId,
-    responseHash: r.response_hash ?? r.responseHash,
-    inputTokens: BigInt(r.input_tokens ?? r.inputTokens),
-    outputTokens: BigInt(r.output_tokens ?? r.outputTokens),
+  const receipt: Receipt = {
+    receiptId: r.receipt_id,
+    configHash: r.config_hash,
+    provider: Number(r.provider),
+    endpointHost: r.endpoint_host,
+    tlsCertSha256: r.tls_cert_sha256,
+    requestBlob: BigInt(r.request_blob),
+    upstreamRequestBlob: BigInt(r.upstream_request_blob),
+    upstreamHeadersHash: r.upstream_headers_hash,
+    modelId: r.model_id,
+    providerRequestId: r.provider_request_id,
+    responseBlob: BigInt(r.response_blob),
+    providerMetaHash: r.provider_meta_hash,
+    inputTokens: BigInt(r.input_tokens),
+    cacheCreationTokens: BigInt(r.cache_creation_tokens),
+    cacheReadTokens: BigInt(r.cache_read_tokens),
+    outputTokens: BigInt(r.output_tokens),
     outcome,
   }
   const timestampMs = BigInt(record.timestamp_ms ?? record.timestampMs ?? r.timestamp_ms)
   const signatureHex = String(record.signature ?? record.signature_hex)
 
   // 4. The point of the whole project: verify the enclave's signature client-side.
-  const bytes = serializeReceiptV1(receipt, timestampMs)
+  const bytes = serializeReceipt(receipt, timestampMs)
   check(bytes.length > 0, 'SDK serializes the receipt to BCS', `${bytes.length} bytes`)
 
   const valid = verifyReceipt(receipt, timestampMs, signatureHex, pubkeyHex)
   check(valid, 'SDK verifies the enclave signature over the receipt')
 
-  const tampered: ReceiptV1 = { ...receipt, outcome: ReceiptOutcome.Ok }
+  const tampered: Receipt = { ...receipt, outcome: ReceiptOutcome.Ok }
   const stillValid = verifyReceipt(tampered, timestampMs, signatureHex, pubkeyHex)
   check(!stillValid, 'tampering with the receipt invalidates the signature')
 
@@ -155,7 +163,7 @@ try {
   const cmds = (tx.getData() as any).commands.filter((c: any) => c.$kind === 'MoveCall')
   check(
     cmds.length === 2 && cmds[1].MoveCall.function === 'verify',
-    'PTB chains new_receipt_v1 -> receipt::verify',
+    'PTB chains new_receipt -> receipt::verify',
     `${cmds.length} move calls`,
   )
 } finally {

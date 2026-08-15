@@ -2,7 +2,7 @@ import type { ClientWithCoreApi, SuiClientRegistration } from '@mysten/sui/clien
 import { Transaction } from '@mysten/sui/transactions'
 import { fromHex } from '@mysten/sui/utils'
 import { SekishoClient } from './client'
-import type { ReceiptV1 } from './receipt'
+import type { Receipt } from './receipt'
 
 export interface SekishoExtensionOptions<Name extends string = 'sekisho'> {
   url: string
@@ -45,18 +45,19 @@ export interface BuildVerifyTransactionOptions {
   checkpointId: string
   /** `IntentMessage.timestamp_ms` — must match what the enclave signed. */
   timestampMs: bigint | number
-  receipt: ReceiptV1
-  /** Ed25519 signature over the BCS `IntentMessage<ReceiptV1>`, hex-encoded. */
+  receipt: Receipt
+  /** Ed25519 signature over the BCS `IntentMessage<Receipt>`, hex-encoded. */
   signatureHex: string
 }
 
 /**
  * Build (or append to) a PTB that verifies a receipt onchain.
  *
- * `sekisho::receipt::verify` takes a `ReceiptV1` **by value**, and a PTB cannot
+ * `sekisho::receipt::verify` takes a `Receipt` **by value**, and a PTB cannot
  * construct a Move struct from pure arguments — so this chains two calls:
- * `new_receipt_v1(...)` builds the struct, and its result is passed to
- * `verify(gateway, checkpoint, timestamp_ms, receipt, sig)`.
+ * `new_receipt(...)` builds the struct (17 args, spec order — SPEC.md section 3),
+ * and its result is passed to `verify(gateway, checkpoint, clock, timestamp_ms,
+ * receipt, sig)`.
  *
  * `verify` returns a `VerifiedReceipt` (which has `drop`), so leaving the
  * result unused is valid. To act on the verified data, append further calls
@@ -77,19 +78,27 @@ export function buildVerifyTransaction(options: BuildVerifyTransactionOptions): 
     signatureHex,
   } = options
 
-  // Passed on as the whole command result (a single `ReceiptV1` return value),
+  // Passed on as the whole command result (a single `Receipt` return value),
   // not `result[0]` — indexing would produce a NestedResult referring to a
   // field of a multi-value return, which this function does not have.
   const receiptArg = transaction.moveCall({
-    target: `${packageId}::receipt::new_receipt_v1`,
+    target: `${packageId}::receipt::new_receipt`,
     arguments: [
       transaction.pure.vector('u8', fromHex(receipt.receiptId)),
       transaction.pure.vector('u8', fromHex(receipt.configHash)),
-      transaction.pure.vector('u8', fromHex(receipt.requestHash)),
-      transaction.pure.vector('u8', fromHex(receipt.upstreamRequestHash)),
+      transaction.pure.u8(receipt.provider),
+      transaction.pure.string(receipt.endpointHost),
+      transaction.pure.vector('u8', fromHex(receipt.tlsCertSha256)),
+      transaction.pure.u256(receipt.requestBlob),
+      transaction.pure.u256(receipt.upstreamRequestBlob),
+      transaction.pure.vector('u8', fromHex(receipt.upstreamHeadersHash)),
       transaction.pure.string(receipt.modelId),
-      transaction.pure.vector('u8', fromHex(receipt.responseHash)),
+      transaction.pure.string(receipt.providerRequestId),
+      transaction.pure.u256(receipt.responseBlob),
+      transaction.pure.vector('u8', fromHex(receipt.providerMetaHash)),
       transaction.pure.u64(receipt.inputTokens),
+      transaction.pure.u64(receipt.cacheCreationTokens),
+      transaction.pure.u64(receipt.cacheReadTokens),
       transaction.pure.u64(receipt.outputTokens),
       transaction.pure.u8(receipt.outcome),
     ],

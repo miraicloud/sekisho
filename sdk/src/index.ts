@@ -4,16 +4,16 @@ export { SekishoError } from './errors'
 export { sekisho, buildVerifyTransaction } from './extension'
 export type { SekishoExtensionOptions, BuildVerifyTransactionOptions } from './extension'
 export {
-  RECEIPT_INTENT_V1,
+  RECEIPT_INTENT,
   ReceiptOutcome,
-  serializeReceiptV1,
+  serializeReceipt,
   verifyReceipt,
   canonicalJson,
   hashJson,
   hashRequest,
   hashResponse,
 } from './receipt'
-export type { ReceiptV1 } from './receipt'
+export type { Receipt } from './receipt'
 export type {
   ChatMessage,
   ChatContentPart,

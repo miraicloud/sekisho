@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { Transaction } from '@mysten/sui/transactions'
 import { buildVerifyTransaction, sekisho } from '../src/extension'
-import type { ReceiptV1 } from '../src/receipt'
+import type { Receipt } from '../src/receipt'
 import { ReceiptOutcome } from '../src/receipt'
 
 // Offline: inspects `Transaction.getData()` directly rather than calling
@@ -13,24 +13,32 @@ const PACKAGE_ID = `0x${'1'.repeat(64)}`
 const GATEWAY_ID = `0x${'2'.repeat(64)}`
 const CHECKPOINT_ID = `0x${'3'.repeat(64)}`
 
-const receipt: ReceiptV1 = {
+const receipt: Receipt = {
   receiptId: '00'.repeat(16),
   configHash: 'aa'.repeat(32),
-  requestHash: 'bb'.repeat(32),
-  upstreamRequestHash: 'cc'.repeat(32),
+  provider: 0,
+  endpointHost: 'api.anthropic.com',
+  tlsCertSha256: 'bb'.repeat(32),
+  requestBlob: 12345n,
+  upstreamRequestBlob: 67890n,
+  upstreamHeadersHash: 'cc'.repeat(32),
   modelId: 'claude-sonnet-5',
-  responseHash: 'dd'.repeat(32),
+  providerRequestId: 'msg_011Ce3rq3tLXgrQNPLAYKda8',
+  responseBlob: 24680n,
+  providerMetaHash: 'dd'.repeat(32),
   inputTokens: 1000n,
+  cacheCreationTokens: 0n,
+  cacheReadTokens: 0n,
   outputTokens: 250n,
   outcome: ReceiptOutcome.Ok,
 }
 
 describe('buildVerifyTransaction', () => {
-  // `receipt::verify` takes a ReceiptV1 by value and a PTB cannot build a Move
-  // struct from pure args, so the helper must chain new_receipt_v1 -> verify
-  // and pass the constructor's Result. Asserting the shape here is what keeps
+  // `receipt::verify` takes a Receipt by value and a PTB cannot build a Move
+  // struct from pure args, so the helper must chain new_receipt -> verify and
+  // pass the constructor's Result. Asserting the shape here is what keeps
   // this helper honest against move/sources/receipt.move.
-  test('chains new_receipt_v1 into verify, passing the struct as a Result', () => {
+  test('chains new_receipt into verify, passing the struct as a Result', () => {
     const tx = buildVerifyTransaction({
       packageId: PACKAGE_ID,
       gatewayId: GATEWAY_ID,
@@ -58,8 +66,12 @@ describe('buildVerifyTransaction', () => {
     const ctor = moveCalls[0]!.MoveCall!
     expect(ctor.package).toBe(PACKAGE_ID)
     expect(ctor.module).toBe('receipt')
-    expect(ctor.function).toBe('new_receipt_v1')
-    expect(ctor.arguments).toHaveLength(9)
+    expect(ctor.function).toBe('new_receipt')
+    // receiptId, configHash, provider, endpointHost, tlsCertSha256, requestBlob,
+    // upstreamRequestBlob, upstreamHeadersHash, modelId, providerRequestId,
+    // responseBlob, providerMetaHash, inputTokens, cacheCreationTokens,
+    // cacheReadTokens, outputTokens, outcome — 17 args, spec order.
+    expect(ctor.arguments).toHaveLength(17)
 
     const call = moveCalls[1]!.MoveCall!
     expect(call.package).toBe(PACKAGE_ID)

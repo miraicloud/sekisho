@@ -124,23 +124,32 @@ export type SekishoResponse<T> = {
 // ─── Receipts endpoint (GET /receipts/:id) ──────────────────────────────────
 
 /**
- * JSON wire shape returned by `GET /receipts/:id`. Byte fields are hex
- * strings; u64 fields are decimal strings (never JSON numbers — they can
- * exceed `Number.MAX_SAFE_INTEGER`, notably `input_tokens`/`output_tokens`
- * which are provider-reported `u64`s).
+ * JSON wire shape returned by `GET /receipts/:id`, mirroring `Receipt`
+ * (SPEC.md section 3) field-for-field. Byte fields are hex strings; `*_blob`
+ * fields are `u256` Walrus blob ids as decimal strings; `timestamp_ms` and
+ * `*_tokens` fields are `u64` as decimal strings (never JSON numbers — they
+ * can exceed `Number.MAX_SAFE_INTEGER`).
  */
 export type ReceiptRecord = {
   receipt_id: string
   timestamp_ms: string
   config_hash: string
-  request_hash: string
-  upstream_request_hash: string
+  provider: number
+  endpoint_host: string
+  tls_cert_sha256: string
+  request_blob: string
+  upstream_request_blob: string
+  upstream_headers_hash: string
   model_id: string
-  response_hash: string
+  provider_request_id: string
+  response_blob: string
+  provider_meta_hash: string
   input_tokens: string
+  cache_creation_tokens: string
+  cache_read_tokens: string
   output_tokens: string
   outcome: number
-  /** Ed25519 signature over the BCS-encoded `IntentMessage<ReceiptV1>`, hex-encoded. */
+  /** Ed25519 signature over the BCS-encoded `IntentMessage<Receipt>`, hex-encoded. */
   signature: string
   [key: string]: unknown
 }
