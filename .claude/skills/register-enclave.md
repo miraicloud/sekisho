@@ -2,7 +2,7 @@
 
 Use this skill to boot a sekisho enclave and register (or re-register) it on-chain via
 `sekisho::checkpoint`. Style and troubleshooting format follow
-`an internal sibling project/.claude/skills/register-enclave.md`; the flow itself differs because
+an internal sibling project's equivalent runbook; the flow itself differs because
 sekisho's registration is **permissionless** (no admin cap gates it) and **nonce-bound** (the
 attestation must be fetched for the specific address that will submit it).
 

@@ -3,7 +3,7 @@
 # inbound HTTP (host TCP:$HTTP_PORT -> enclave VSOCK:3000 -> enclave app) and
 # outbound HTTPS for each domain in the provider allowlist (enclave loopback
 # -> VSOCK -> this host -> the real provider). Replaces the plain-socat
-# expose_enclave.sh used by an internal sibling project / the Nautilus template --
+# expose_enclave.sh used by an internal sibling project and the Nautilus template --
 # sekisho bakes argonaut into the image instead (see enclave/eif/run.sh),
 # and `argonaut host` does both directions of bridging in one process.
 #

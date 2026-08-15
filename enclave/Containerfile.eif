@@ -1,13 +1,14 @@
 # Reproducible Nitro EIF build for sekisho, adapted from
-# an internal sibling project/enclave/Containerfile.eif (itself the generic
+# an internal sibling project's EIF build (itself the generic
 # unconfirmedlabs/nautilus-rust EIF build shape). StageX (stagex.tools) base
 # images, all pinned by sha256 digest -- "a full source bootstrapped,
 # deterministic, and hermetic build toolchain" -- plus a normalized initramfs
 # (SOURCE_DATE_EPOCH=0, sorted+reproducible cpio) and AWS's `eif_build`
 # producing nitro.eif + nitro.pcrs together.
 #
-# CRITICAL DIFFERENCE from the sibling project: no secret build-args are baked into
-# this image. There is no equivalent of the sibling project's SEAL_* ARGs. All
+# CRITICAL DIFFERENCE from the sibling project this was adapted from: no secret
+# build-args are baked into this image, and there is no equivalent of its
+# Seal-related ARGs. All
 # runtime secrets (provider API keys, caller keys, policy JSON) arrive at boot
 # over VSOCK from argonaut -- see eif/run.sh and docs/SPEC.md sec 4/5. The only
 # thing baked in here that isn't the app binary itself is the outbound HTTPS
@@ -105,7 +106,7 @@ ARG ENCLAVE_BIN=sekisho-enclave
 
 # StageX Rust links build scripts and final musl binaries through libunwind
 # names that are not all present in the runtime layer (same fixup as
-# the sibling project's Containerfile.eif).
+# the sibling project's EIF build).
 RUN ln -sf /usr/lib/gcc/x86_64-linux-musl/13.1.0/libgcc_eh.a /usr/lib/libunwind.a \
 	&& ln -sf libunwind.so.1 /usr/lib/libunwind.so \
 	&& ln -sf libunwind.so.1 /usr/lib/libunwind.so.8 \

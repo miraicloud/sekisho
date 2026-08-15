@@ -12,3 +12,6 @@ build/
 # URLs, Cloudflare resource ids) that is deliberately gitignored elsewhere.
 # Kept on disk for reference, never committed.
 docs/research/local-patterns.md
+
+# TypeScript incremental build info
+*.tsbuildinfo

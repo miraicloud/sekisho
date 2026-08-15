@@ -10,7 +10,7 @@
 //! payloads never are in practice.
 //!
 //! `walrus-core` (pinned to the same rev as
-//! `an internal sibling project/enclave`, the house precedent for exactly this
+//! an internal sibling Nautilus project, the house precedent for exactly this
 //! dependency) built and linked cleanly against this crate — see the task
 //! report for confirmation. The fallback path described in the task brief
 //! (a stub returning zeros, for when `walrus-core` cannot be made to build)
@@ -36,7 +36,7 @@ const WALRUS_N_SHARDS: u16 = 1000;
 /// integer (`docs/SPEC.md` §3) — i.e. written with NO ULEB128 length
 /// prefix, unlike this crate's `vector<u8>` fields (see `receipt.rs`).
 /// `BlobId`'s inner `[u8; 32]` is used directly as those LE bytes, matching
-/// `an internal sibling project/enclave/src/audio/walrus.rs`'s
+/// an internal sibling project's
 /// `blob_id_bcs_u256_bytes` — the house precedent for this exact
 /// byte-representation choice.
 pub fn compute_blob_id_bytes(canonical_bytes: &[u8]) -> [u8; 32] {

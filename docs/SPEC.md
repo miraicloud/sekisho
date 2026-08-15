@@ -122,7 +122,7 @@ provider-signed responses or zkTLS.
 
 ## 4. Enclave (`enclave/`)
 
-Single Rust binary crate, edition 2024, modeled on `an internal sibling project/enclave`:
+Single Rust binary crate, edition 2024, modeled on an internal sibling Nautilus project:
 axum 0.8, tokio; `nautilus`/`nautilus-nsm` pinned by git rev to `unconfirmedlabs/nautilus-rust`;
 `/dev/nsm` boot switch (NsmAttestor vs `NautilusContext::development()`); `unsafe_code = "forbid"`;
 concurrency bounded by semaphore.
@@ -168,7 +168,7 @@ changes are PCR-visible — that's a feature).
 Nautilus's `eif_build` invocation passes a **single** `--ramdisk`. AWS treats the first ramdisk as
 the *bootstrap* ramdisk and any later ones as *application* ramdisks, so with one ramdisk there is
 no application layer to measure. Two consequences, both confirmed against real builds of three
-different projects (sekisho, an internal sibling project, nautilus-rust):
+different projects (sekisho, an internal sibling project, and nautilus-rust):
 
 - **PCR0 == PCR1.** With a single ramdisk the whole-image and kernel+bootstrap measurements
   coincide. Not a bug; expected for this build layout.
@@ -186,7 +186,7 @@ would change PCR0/1 semantics and require re-approval.
 
 ## 5. Reproducible build + verification
 
-`Containerfile.eif` + Makefile copied from the the sibling project pattern (StageX digest-pinned,
+`Containerfile.eif` + Makefile copied from an internal sibling project's pattern (StageX digest-pinned,
 static musl, `SOURCE_DATE_EPOCH=0`, `--reproducible` cpio, `rewrite-timestamp=true`,
 `eif_build` → `out/nitro.eif` + `out/nitro.pcrs`). **No build args carrying secrets.**
 

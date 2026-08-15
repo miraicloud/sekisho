@@ -6,7 +6,7 @@ use sekisho_enclave::{AppConfig, app, serve};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // NSM vs. dev-mode boot switch (an internal sibling project pattern, per
+    // NSM vs. dev-mode boot switch (internal sibling-project pattern, per
     // docs/research/local-patterns.md §1.1).
     let ctx = if Path::new("/dev/nsm").exists() {
         println!("[nautilus] booting with Nitro Secure Module");

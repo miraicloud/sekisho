@@ -25,7 +25,7 @@ tokio = { version = "1.52.1", features = ["macros", "net", "rt-multi-thread", "s
 uuid = { version = "1.19.0", features = ["v4"] }
 # Local (no-network) Walrus blob ID computation for request_blob /
 # upstream_request_blob / response_blob (`docs/SPEC.md` §3). Pinned to the
-# same rev as `an internal sibling project/enclave`, the house precedent for this
+# same rev as an internal sibling Nautilus project, the house precedent for this
 # exact dependency.
 walrus-core = { git = "https://github.com/MystenLabs/walrus.git", rev = "c377852712d30a23031c04d07dc13bf5e20a92de", package = "walrus-core" }
 

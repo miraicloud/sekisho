@@ -10,8 +10,7 @@ reasoning behind the spec is auditable rather than folklore.
 | `provider-apis.md` | Anthropic / OpenAI-compatible / OpenRouter API surfaces, canonical hashing, streaming, error taxonomy |
 | `UsingNautilus.md` | Upstream Nautilus operational guide (vendored copy) |
 
-One brief is deliberately **not** committed: an internal-patterns review of sibling repos
-(`an internal sibling project`, `onara`, `hayabusa`). It quotes production infrastructure — backend
-URLs and Cloudflare resource ids — that those repos keep in gitignored config precisely so it
-never lands in open-source code. It is gitignored here at `docs/research/local-patterns.md` and
+One brief is deliberately **not** committed: a review of patterns in internal sibling projects.
+It quotes production infrastructure that those projects keep in gitignored config precisely so it
+never reaches open-source code. It is gitignored here at `docs/research/local-patterns.md` and
 kept on disk for local reference only.

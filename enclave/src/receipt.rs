@@ -22,7 +22,7 @@
 //! `String` fields (`endpoint_host`, `model_id`, `provider_request_id`) are
 //! BCS-encoded as ULEB128 length (of the UTF-8 byte length) + UTF-8 bytes,
 //! same as a `vector<u8>` of those bytes. This mirrors
-//! `an internal sibling project/enclave/src/audio/intent.rs`'s hand-rolled
+//! an internal sibling project's hand-rolled
 //! writer style.
 
 use std::collections::VecDeque;

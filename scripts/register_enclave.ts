@@ -2,7 +2,7 @@
 /**
  * Register a sekisho enclave on-chain by fetching a nonce-bound Nitro
  * attestation document and calling sekisho::checkpoint::register via a Sui
- * PTB. Adapted from an internal sibling project/scripts/register_enclave.ts.
+ * PTB. Adapted from an internal sibling project's registration script.
  *
  * Registration is bound to the registering Sui address (docs/SPEC.md sec 3):
  * `checkpoint::register` asserts the attestation document's `nonce` field
