@@ -100,6 +100,9 @@ export function buildVerifyTransaction(options: BuildVerifyTransactionOptions): 
     arguments: [
       transaction.object(gatewayId),
       transaction.object(checkpointId),
+      // Consensus time for the ReceiptVerified event, so the skew against the
+      // enclave's self-reported timestamp is visible in the event itself.
+      transaction.object.clock(),
       transaction.pure.u64(timestampMs),
       receiptArg,
       transaction.pure.vector('u8', fromHex(signatureHex)),

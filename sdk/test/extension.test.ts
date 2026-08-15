@@ -65,9 +65,9 @@ describe('buildVerifyTransaction', () => {
     expect(call.package).toBe(PACKAGE_ID)
     expect(call.module).toBe('receipt')
     expect(call.function).toBe('verify')
-    // gateway, checkpoint, timestamp_ms, receipt (Result), sig
-    expect(call.arguments).toHaveLength(5)
-    expect(call.arguments[3]!.$kind).toBe('Result')
+    // gateway, checkpoint, clock, timestamp_ms, receipt (Result), sig
+    expect(call.arguments).toHaveLength(6)
+    expect(call.arguments[4]!.$kind).toBe('Result')
   })
 
   test('appends to an existing transaction when provided', () => {

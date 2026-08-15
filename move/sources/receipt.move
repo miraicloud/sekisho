@@ -14,7 +14,9 @@ module sekisho::receipt;
 
 use std::bcs;
 use std::string::String;
+use sui::clock::Clock;
 use sui::ed25519;
+use sui::event;
 use sekisho::checkpoint::{Checkpoint, Gateway};
 
 // === Constants ===
@@ -73,6 +75,46 @@ public struct VerifiedReceipt has drop {
     outcome: u8,
 }
 
+/// Emitted by `verify` on every successful verification, so inference history
+/// is queryable rather than only reconstructable by parsing transaction
+/// arguments.
+///
+/// Two notes on what this can and cannot tell you:
+///
+/// - **Only successes appear.** A failed `verify` aborts, and an abort rolls
+///   back events with the rest of the transaction. There is no onchain record
+///   of rejected Receipts.
+/// - **Duplicates are expected.** Receipts are replayable by design, so the
+///   same `receipt_id` may be verified — and emitted — more than once.
+///   Indexers must still dedupe by `receipt_id`.
+///
+/// `verified_at_ms` is consensus time from the `Clock`, carried alongside the
+/// enclave's self-reported `timestamp_ms` so the skew between them is visible
+/// in the event itself rather than requiring a join against transaction
+/// metadata. `pcr_version` is included so history can be filtered by code
+/// version — notably, to find everything verified under a build that was later
+/// revoked.
+public struct ReceiptVerified has copy, drop {
+    gateway: ID,
+    operator: address,
+    verifier: address,
+    pcr_version: u64,
+    receipt_id: vector<u8>,
+    config_hash: vector<u8>,
+    request_hash: vector<u8>,
+    upstream_request_hash: vector<u8>,
+    model_id: String,
+    response_hash: vector<u8>,
+    input_tokens: u64,
+    output_tokens: u64,
+    outcome: u8,
+    /// Enclave-reported signing time. Advisory: the enclave's clock derives
+    /// from its host and is not consensus time.
+    timestamp_ms: u64,
+    /// Consensus time at verification, from `sui::clock::Clock`.
+    verified_at_ms: u64,
+}
+
 // === Constructors ===
 
 /// Build a `ReceiptV1` payload. Exposed for tests and for consumers that
@@ -111,9 +153,11 @@ public fun new_receipt_v1(
 public fun verify(
     gateway: &Gateway,
     checkpoint: &Checkpoint,
+    clock: &Clock,
     timestamp_ms: u64,
     receipt: ReceiptV1,
     sig: &vector<u8>,
+    ctx: &TxContext,
 ): VerifiedReceipt {
     assert!(!checkpoint.is_revoked(gateway.pcr_version()), ERevokedGateway);
 
@@ -137,6 +181,24 @@ public fun verify(
         output_tokens,
         outcome,
     } = payload;
+
+    event::emit(ReceiptVerified {
+        gateway: object::id(gateway),
+        operator: gateway.operator(),
+        verifier: ctx.sender(),
+        pcr_version: gateway.pcr_version(),
+        receipt_id,
+        config_hash,
+        request_hash,
+        upstream_request_hash,
+        model_id,
+        response_hash,
+        input_tokens,
+        output_tokens,
+        outcome,
+        timestamp_ms,
+        verified_at_ms: clock.timestamp_ms(),
+    });
 
     VerifiedReceipt {
         receipt_id,
@@ -312,8 +374,17 @@ fun verify_succeeds_and_exposes_all_fields() {
         scenario.ctx(),
     );
 
+    let clock = sui::clock::create_for_testing(scenario.ctx());
     let sig = TEST_SIG;
-    let verified = verify(&gateway, &cp, TEST_TIMESTAMP_MS, nominal_receipt_for_testing(), &sig);
+    let verified = verify(
+        &gateway,
+        &cp,
+        &clock,
+        TEST_TIMESTAMP_MS,
+        nominal_receipt_for_testing(),
+        &sig,
+        scenario.ctx(),
+    );
 
     assert_eq!(verified.receipt_id(), x"000102030405060708090a0b0c0d0e0f");
     assert_eq!(verified.config_hash(), x"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -328,6 +399,7 @@ fun verify_succeeds_and_exposes_all_fields() {
     assert_eq!(verified.output_tokens(), 250);
     assert_eq!(verified.outcome(), 0);
 
+    clock.destroy_for_testing();
     checkpoint::destroy_gateway_for_testing(gateway);
     test_scenario::return_shared(cp);
     scenario.return_to_sender(cap);
@@ -354,9 +426,19 @@ fun verify_aborts_on_invalid_signature() {
     );
 
     let bad_sig = TEST_BAD_SIG;
-    let verified = verify(&gateway, &cp, TEST_TIMESTAMP_MS, nominal_receipt_for_testing(), &bad_sig);
+    let clock = sui::clock::create_for_testing(scenario.ctx());
+    let verified = verify(
+        &gateway,
+        &cp,
+        &clock,
+        TEST_TIMESTAMP_MS,
+        nominal_receipt_for_testing(),
+        &bad_sig,
+        scenario.ctx(),
+    );
     let VerifiedReceipt { .. } = verified;
 
+    clock.destroy_for_testing();
     checkpoint::destroy_gateway_for_testing(gateway);
     test_scenario::return_shared(cp);
     scenario.return_to_sender(cap);
@@ -384,10 +466,20 @@ fun verify_aborts_on_revoked_gateway() {
 
     checkpoint::revoke_pcrs(&mut cp, &cap, pcr_version);
 
+    let clock = sui::clock::create_for_testing(scenario.ctx());
     let sig = TEST_SIG;
-    let verified = verify(&gateway, &cp, TEST_TIMESTAMP_MS, nominal_receipt_for_testing(), &sig);
+    let verified = verify(
+        &gateway,
+        &cp,
+        &clock,
+        TEST_TIMESTAMP_MS,
+        nominal_receipt_for_testing(),
+        &sig,
+        scenario.ctx(),
+    );
     let VerifiedReceipt { .. } = verified;
 
+    clock.destroy_for_testing();
     checkpoint::destroy_gateway_for_testing(gateway);
     test_scenario::return_shared(cp);
     scenario.return_to_sender(cap);
