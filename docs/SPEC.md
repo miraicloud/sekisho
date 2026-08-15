@@ -62,28 +62,49 @@ cap-gated and sekisho needs **permissionless operator registration**:
   - Reboot ⇒ new ephemeral key ⇒ re-register (documented runbook; old Gateway destroyable by
     operator).
 - `sekisho::receipt` — receipt verification:
-  - `ReceiptV1` payload struct (below), `RECEIPT_INTENT_V1: u8 = 0`.
+  - `Receipt` payload struct (below), `RECEIPT_INTENT: u8 = 0`.
   - `verify(gateway: &Gateway, checkpoint: &Checkpoint, timestamp_ms, payload, sig)` — aborts
     unless sig valid (Ed25519 over BCS `IntentMessage`) AND the gateway's PCR version is not
     revoked. Returns a hot-potato-free witness struct callers can consume.
   - Inline `#[test]`s including **`test_bcs_parity` with exact byte offsets** (house pattern from
     an internal sibling project — non-negotiable guard against Rust/Move drift).
 
-### ReceiptV1 (BCS, field order is normative)
+### Receipt (BCS, field order is normative)
 
 | field | type | notes |
 |---|---|---|
-| `receipt_id` | `vector<u8>` (16) | UUID assigned by enclave |
-| `config_hash` | `vector<u8>` (32) | SHA-256 of active policy/config JSON (canonical) |
-| `request_hash` | `vector<u8>` (32) | SHA-256 of canonicalized client request |
-| `upstream_request_hash` | `vector<u8>` (32) | hash of what was actually sent upstream (captures gateway transforms — Phala lesson) |
-| `model_id` | `String` | provider-reported served model (read back off response, not the request — OpenRouter lesson) |
-| `response_hash` | `vector<u8>` (32) | SHA-256 of canonicalized assembled response (streamed deltas accumulated first — never raw SSE bytes) |
-| `input_tokens` / `output_tokens` | `u64` | provider-reported usage |
+| `receipt_id` | `vector<u8>` (16) | UUID assigned by the enclave |
+| `config_hash` | `vector<u8>` (32) | SHA-256 of canonical policy JSON — policy only, never secrets |
+| `provider` | `u8` | 0 = anthropic, 1 = openai-compatible |
+| `endpoint_host` | `String` | TLS hostname actually validated during the upstream handshake |
+| `tls_cert_sha256` | `vector<u8>` (32) | SHA-256 of the upstream server's leaf certificate (DER). Binds the counterparty cryptographically rather than by assertion |
+| `request_blob` | `u256` | Walrus blob ID of the canonical client request |
+| `upstream_request_blob` | `u256` | Walrus blob ID of the canonical upstream request (captures gateway transforms) |
+| `upstream_headers_hash` | `vector<u8>` (32) | SHA-256 of canonical upstream request headers — proves ZDR/no-training headers were actually set |
+| `model_id` | `String` | served model, read off the response, never the request |
+| `provider_request_id` | `String` | provider's own id (Anthropic `id` / `request-id`); empty when absent |
+| `response_blob` | `u256` | Walrus blob ID of the canonical assembled response (streamed deltas accumulated first — never raw SSE bytes) |
+| `provider_meta_hash` | `vector<u8>` (32) | SHA-256 of a canonical provider-specific blob (`stop_reason`, `service_tier`, `inference_geo`, …) |
+| `input_tokens` / `cache_creation_tokens` / `cache_read_tokens` / `output_tokens` | `u64` | provider-reported usage, kept separate so billing detail survives |
 | `outcome` | `u8` | 0=ok, 1=refusal (HTTP 200 refusals still get receipts), 2=upstream_error, 3=policy_denied |
 
-Envelope: `IntentMessage<ReceiptV1> { intent: 0, timestamp_ms, payload }`, Ed25519-signed.
-Schema evolution = new intent byte + new struct (`ReceiptV2`), never mutation.
+Envelope: `IntentMessage<Receipt> { intent: RECEIPT_INTENT (0), timestamp_ms, payload }`,
+BCS-serialized and Ed25519-signed. The intent byte is a domain separator — it stops a receipt
+signature being replayable as another message type — and doubles as the version escape hatch if an
+incompatible schema is ever needed after launch. There is no `V1`/`V2` in any type name; the
+schema simply changes until there are users.
+
+**Blob IDs are the content commitments.** A Walrus blob ID is derived from the content (encoding
+tag + unencoded length + Merkle root over the slivers), so it commits to the bytes exactly as a
+hash would, while additionally addressing them. It is computed locally with `walrus-core`, so
+`0` means "computed but not archived" — a receipt never depends on a storage write succeeding.
+Blobs only, never quilts: a quilt patch is identified by its quilt and offsets rather than by its
+content, so it would not be a commitment.
+
+**Trust boundary.** A receipt proves what request left the enclave, which TLS peer answered, and
+what came back. It cannot prove the provider ran the model it named — providers do not sign
+responses, so the chain of custody ends at their TLS termination. Anything stronger needs
+provider-signed responses or zkTLS.
 
 ## 4. Enclave (`enclave/`)
 

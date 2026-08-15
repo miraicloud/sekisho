@@ -1,0 +1,78 @@
+{
+  "description": "Receipt BCS test vectors. Envelope: IntentMessage<Receipt> = intent(u8) || timestamp_ms(u64 LE) || Receipt fields in the order below, BCS-encoded. Move, Rust and TypeScript MUST each reproduce expected_bcs_hex byte-for-byte.",
+  "spec": "docs/SPEC.md section 3",
+  "field_order": [
+    "receipt_id",
+    "config_hash",
+    "provider",
+    "endpoint_host",
+    "tls_cert_sha256",
+    "request_blob",
+    "upstream_request_blob",
+    "upstream_headers_hash",
+    "model_id",
+    "provider_request_id",
+    "response_blob",
+    "provider_meta_hash",
+    "input_tokens",
+    "cache_creation_tokens",
+    "cache_read_tokens",
+    "output_tokens",
+    "outcome"
+  ],
+  "encoding_notes": "byte-vector fields are hex; *_blob are u256 Walrus blob ids as DECIMAL STRINGS (0 = computed but not archived), BCS-encoded as 32 bytes little-endian; timestamp and *_tokens are u64 as decimal strings (JSON numbers cannot round-trip u64); provider and outcome are u8 numbers; endpoint_host/model_id/provider_request_id are UTF-8 strings.",
+  "vectors": [
+    {
+      "name": "nominal-anthropic-success",
+      "fields": {
+        "intent": 0,
+        "timestamp_ms": "1786767276534",
+        "receipt_id": "000102030405060708090a0b0c0d0e0f",
+        "config_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provider": 0,
+        "endpoint_host": "api.anthropic.com",
+        "tls_cert_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "request_blob": "7719472615821079694904732333912527190217998977709370935963838933860875309329",
+        "upstream_request_blob": "15438945231642159389809464667825054380435997955418741871927677867721750618658",
+        "upstream_headers_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "model_id": "claude-haiku-4-5-20251001",
+        "provider_request_id": "msg_011Ce3rq3tLXgrQNPLAYKda8",
+        "response_blob": "23158417847463239084714197001737581570653996933128112807891516801582625927987",
+        "provider_meta_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "input_tokens": "17",
+        "cache_creation_tokens": "0",
+        "cache_read_tokens": "0",
+        "output_tokens": "9",
+        "outcome": 0
+      },
+      "byte_length": 361,
+      "expected_bcs_hex": "00f6f9a003a001000010000102030405060708090a0b0c0d0e0f20aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00116170692e616e7468726f7069632e636f6d20bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222220cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc19636c617564652d6861696b752d342d352d32303235313030311c6d73675f303131436533727133744c586772514e504c41594b646138333333333333333333333333333333333333333333333333333333333333333320dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd110000000000000000000000000000000000000000000000090000000000000000"
+    },
+    {
+      "name": "refusal-unarchived-max-tokens",
+      "fields": {
+        "intent": 0,
+        "timestamp_ms": "1735689600000",
+        "receipt_id": "ffffffffffffffffffffffffffffffff",
+        "config_hash": "0101010101010101010101010101010101010101010101010101010101010101",
+        "provider": 1,
+        "endpoint_host": "api.openai.com",
+        "tls_cert_sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+        "request_blob": "0",
+        "upstream_request_blob": "0",
+        "upstream_headers_hash": "0303030303030303030303030303030303030303030303030303030303030303",
+        "model_id": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+        "provider_request_id": "",
+        "response_blob": "0",
+        "provider_meta_hash": "0404040404040404040404040404040404040404040404040404040404040404",
+        "input_tokens": "18446744073709551615",
+        "cache_creation_tokens": "18446744073709551615",
+        "cache_read_tokens": "0",
+        "output_tokens": "0",
+        "outcome": 1
+      },
+      "byte_length": 506,
+      "expected_bcs_hex": "00007c291f9401000010ffffffffffffffffffffffffffffffff200101010101010101010101010101010101010101010101010101010101010101010e6170692e6f70656e61692e636f6d20020202020202020202020202020202020202020202020202020202020202020200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000200303030303030303030303030303030303030303030303030303030303030303c8016d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d000000000000000000000000000000000000000000000000000000000000000000200404040404040404040404040404040404040404040404040404040404040404ffffffffffffffffffffffffffffffff0000000000000000000000000000000001"
+    }
+  ]
+}
