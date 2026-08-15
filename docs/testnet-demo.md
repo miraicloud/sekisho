@@ -163,3 +163,15 @@ the on-chain `code_ref` predates the commits made after the enclave was built.
 2. **…whose first implementation was itself wrong.** It disambiguated hex from decimal by "looks
    numeric", but a 64-char hex id can be all decimal digits — it returned 10^62 for one. Now keyed
    on the fixed wire width or an explicit prefix.
+
+
+## A note on `code_ref` after the history rewrite
+
+This repository's history was rewritten before open-sourcing, so every commit SHA changed. The
+`code_ref` values recorded on the on-chain Checkpoint during these runs (`ad0ec16`, `6caed16`)
+refer to commits that no longer exist here, and `verify_deployment.ts` will therefore report a
+code-ref mismatch against those historical deployments.
+
+The Sui transaction digests and object ids above are chain data and are unaffected — the
+certificates still verify. Only the git-ref correlation is broken, and only for these two
+pre-publication deployments. Any future deployment records a ref from the published history.
