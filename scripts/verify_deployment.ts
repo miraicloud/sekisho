@@ -139,10 +139,32 @@ function comparePcrs(live: NitroAttestationDoc, expected: Record<string, string>
 
 /** Best-effort coercion of a Move JSON field to lowercase hex, handling the
  * couple of plausible representations (hex string, 0x-prefixed hex, byte array). */
+/**
+ * Move `vector<u8>` fields reach us in three different shapes depending on the
+ * reader: `sui client object --json` emits **base64**, some RPC paths emit a
+ * plain number array, and hand-written input is usually hex. Handle all three
+ * — assuming hex silently produced "no approved entry matches" against a
+ * Checkpoint whose entry did in fact match, since base64 is often valid hex-ish
+ * text but decodes to entirely different bytes.
+ */
 function fieldToHex(value: unknown): string | undefined {
-  if (typeof value === "string") return normalizePcrHex(value);
   if (Array.isArray(value) && value.every((v) => typeof v === "number")) {
     return Buffer.from(value as number[]).toString("hex");
+  }
+  if (typeof value !== "string") return undefined;
+
+  const stripped = value.startsWith("0x") ? value.slice(2) : value;
+  // A PCR is 48 bytes: 96 hex chars, or 64 base64 chars.
+  if (/^[0-9a-fA-F]+$/.test(stripped) && stripped.length % 2 === 0) {
+    return normalizePcrHex(value);
+  }
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    try {
+      const hex = Buffer.from(value, "base64").toString("hex");
+      if (hex.length > 0) return hex;
+    } catch {
+      // fall through
+    }
   }
   return undefined;
 }
@@ -227,7 +249,11 @@ async function checkOnChain(opts: {
   if (ref) {
     const codeRef = entry.code_ref ?? entry.codeRef;
     if (typeof codeRef === "string" && codeRef.length > 0) {
-      if (codeRef === ref) {
+      // Git short refs are normal on-chain (they're typed by hand at approval
+      // time), so treat a prefix match as a match rather than warning.
+      const refMatches =
+        codeRef === ref || ref.startsWith(String(codeRef)) || String(codeRef).startsWith(ref);
+      if (refMatches) {
         report("PASS", "code_ref matches --ref", codeRef);
       } else {
         report("WARN", "code_ref differs from --ref", `on-chain=${codeRef} --ref=${ref}`);

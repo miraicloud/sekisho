@@ -29,3 +29,14 @@
   Nautilus passes a single `--ramdisk`, so `eif_build` records no application layer and PCR2 is a
   constant (and PCR0 collapses to equal PCR1). The binding is real but comes from PCR0. A security
   property attributed to the wrong mechanism reads as verified when it isn't.
+
+- **Onchain reads return `vector<u8>` as base64, not hex.** `verify_deployment` compared PCRs as
+  hex against `sui client object --json` output and reported "no approved entry matches" for a
+  Checkpoint whose entry *did* match — while `register` had already succeeded onchain, proving the
+  match. Two readers disagreeing about the same bytes is the tell; accept base64, hex, and byte
+  arrays.
+
+- **A verifier that only ever passes proves nothing.** After the first successful onchain
+  `receipt::verify`, flipping one byte of the receipt was what actually demonstrated the check
+  works: the transaction aborted with `EInvalidSignature`. Always pair a positive result with the
+  negative case.
