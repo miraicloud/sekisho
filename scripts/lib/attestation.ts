@@ -50,6 +50,12 @@ class CborReader {
     return out;
   }
 
+  /** True if the next byte is the indefinite-length "break" marker (0xff). */
+  private atBreak(): boolean {
+    if (this.pos >= this.buf.length) throw new Error("cbor: unexpected end of input");
+    return this.buf[this.pos] === 0xff;
+  }
+
   private readLength(additional: number): number {
     if (additional < 24) return additional;
     if (additional === 24) return this.byte();
@@ -83,25 +89,75 @@ class CborReader {
         return this.readLength(additional);
       case 1: // negative int
         return -1 - this.readLength(additional);
-      case 2: // byte string
-        if (additional === 31) throw new Error("cbor: indefinite byte strings unsupported");
+      // Indefinite-length forms (additional == 31) are not theoretical: real
+      // AWS NSM attestation documents use an indefinite-length map for the
+      // payload. Each indefinite item streams chunks/entries until a "break"
+      // (0xff, i.e. major 7 / additional 31).
+      case 2: {
+        // byte string
+        if (additional === 31) {
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          while (!this.atBreak()) {
+            const chunk = this.decode();
+            if (!(chunk instanceof Uint8Array)) {
+              throw new Error("cbor: indefinite byte string contains a non-byte-string chunk");
+            }
+            chunks.push(chunk);
+            total += chunk.length;
+          }
+          this.byte(); // consume break
+          const out = new Uint8Array(total);
+          let at = 0;
+          for (const c of chunks) {
+            out.set(c, at);
+            at += c.length;
+          }
+          return out;
+        }
         return this.bytes(this.readLength(additional));
-      case 3: // text string
-        if (additional === 31) throw new Error("cbor: indefinite text strings unsupported");
+      }
+      case 3: {
+        // text string
+        if (additional === 31) {
+          let out = "";
+          while (!this.atBreak()) {
+            const chunk = this.decode();
+            if (typeof chunk !== "string") {
+              throw new Error("cbor: indefinite text string contains a non-text chunk");
+            }
+            out += chunk;
+          }
+          this.byte(); // consume break
+          return out;
+        }
         return new TextDecoder().decode(this.bytes(this.readLength(additional)));
+      }
       case 4: {
         // array
-        if (additional === 31) throw new Error("cbor: indefinite arrays unsupported");
-        const len = this.readLength(additional);
         const arr: CborValue[] = [];
+        if (additional === 31) {
+          while (!this.atBreak()) arr.push(this.decode());
+          this.byte(); // consume break
+          return arr;
+        }
+        const len = this.readLength(additional);
         for (let i = 0; i < len; i++) arr.push(this.decode());
         return arr;
       }
       case 5: {
         // map
-        if (additional === 31) throw new Error("cbor: indefinite maps unsupported");
-        const len = this.readLength(additional);
         const map = new Map<CborValue, CborValue>();
+        if (additional === 31) {
+          while (!this.atBreak()) {
+            const k = this.decode();
+            const v = this.decode();
+            map.set(k, v);
+          }
+          this.byte(); // consume break
+          return map;
+        }
+        const len = this.readLength(additional);
         for (let i = 0; i < len; i++) {
           const k = this.decode();
           const v = this.decode();
