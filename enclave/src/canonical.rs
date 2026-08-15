@@ -90,9 +90,14 @@ pub struct CanonicalRequest {
     pub temperature: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Provider-reported usage, kept as four separate counters (`docs/SPEC.md`
+/// §3) rather than folded into a single `input_tokens` total, so billing
+/// detail (fresh vs. cache-write vs. cache-read) survives onto the receipt.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CanonicalUsage {
     pub input_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
     pub output_tokens: u64,
 }
 
@@ -106,6 +111,41 @@ pub struct CanonicalResponse {
     pub stop_reason: String,
     pub usage: CanonicalUsage,
 }
+
+/// Canonical provider-metadata blob hashed into `provider_meta_hash`
+/// (`docs/SPEC.md` §3, enclave task brief item 5). Kept separate from
+/// `CanonicalResponse` (which is content-committed via a Walrus blob ID)
+/// because this is provider-observability data, not generation-affecting
+/// content, and is committed by a plain SHA-256 instead. `stop_reason`
+/// duplicates `CanonicalResponse::stop_reason` deliberately: a verifier
+/// hashing this blob alone should be able to recover every field the
+/// enclave committed to under `provider_meta_hash`, without also needing
+/// the (separately Walrus-blob-committed) response content.
+///
+/// `service_tier` is a real field on both providers' response bodies today
+/// (Anthropic's `service_tier`, OpenAI's `service_tier`). `inference_geo` is
+/// not documented on either public API as of this spec version; the field
+/// exists for forward compatibility (task brief item 5) and is populated
+/// only if a future response actually carries it — see the provider
+/// adapters' doc comments for exactly where each adapter looks.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderMeta {
+    pub stop_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference_geo: Option<String>,
+}
+
+/// Canonical (sorted-name) record of the headers actually sent upstream,
+/// hashed into `upstream_headers_hash` (`docs/SPEC.md` §3). A plain
+/// `BTreeMap` gives sorted-key JSON for free via `canonical_bytes` (see
+/// module docs), so no separate sort step is needed. Secret values
+/// (`x-api-key`, `authorization`) MUST be redacted by the caller before
+/// values land here — see `providers::REDACTED_HEADER_VALUE` and each
+/// adapter's header-building function, which is the single place headers
+/// are ever assembled for an outbound call.
+pub type CanonicalHeaders = std::collections::BTreeMap<String, String>;
 
 /// Receipt outcome taxonomy (`docs/SPEC.md` §3): 0 ok, 1 refusal (HTTP 200,
 /// still receipted), 2 upstream_error, 3 policy_denied.

@@ -8,15 +8,19 @@
 //! messages, etc.) rather than lossily round-tripping through a narrower
 //! struct.
 
+use std::collections::BTreeMap;
+
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::tls::TlsInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::canonical::{
     CanonicalBlock, CanonicalMessage, CanonicalRequest, CanonicalResponse, CanonicalRole,
-    CanonicalToolDef, CanonicalUsage, Outcome, sha256,
+    CanonicalToolDef, CanonicalUsage, Outcome, ProviderMeta, sha256,
 };
 
-use super::ProviderError;
+use super::{ProviderError, REDACTED_HEADER_VALUE, UpstreamMeta};
 
 /// PCR-measured provider endpoint (`docs/SPEC.md` §4, load-bearing security
 /// property): NEVER sourced from boot config. An operator who controls
@@ -33,7 +37,18 @@ use super::ProviderError;
 /// of the 2024 edition), which is a second, independent reason not to wire
 /// one up.
 pub const BASE_URL: &str = "https://api.anthropic.com";
+/// `endpoint_host` for every receipt this adapter produces (`docs/SPEC.md`
+/// §3, task brief item 4): the bare hostname, compile-time-constant for the
+/// same PCR-measurement reason as `BASE_URL` above.
+pub const HOST: &str = "api.anthropic.com";
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Response header this adapter falls back to for `provider_request_id`
+/// when the response body carries no `id` field (task brief item 5: "prefer
+/// the body `id`, fall back to header, empty string if neither"). Anthropic
+/// documents `request-id` as the header carrying its own request
+/// identifier.
+const REQUEST_ID_HEADER: &str = "request-id";
 
 #[derive(Debug, Clone, Deserialize)]
 struct WireRequestFields {
@@ -101,13 +116,19 @@ impl WireUsage {
         }
     }
 
-    /// Total billed input-side tokens. `ReceiptV1` has one `input_tokens`
-    /// field, no separate cache accounting, so v1 folds fresh + cache-write
-    /// + cache-read into it (documented deviation — see task report).
-    fn total_input_tokens(&self) -> u64 {
-        self.input_tokens
-            .saturating_add(self.cache_creation_input_tokens)
-            .saturating_add(self.cache_read_input_tokens)
+    /// Maps the four Anthropic usage counters onto `CanonicalUsage`
+    /// one-to-one (`docs/SPEC.md` §3, task brief item 6): unlike the
+    /// removed `ReceiptV1` schema, `Receipt` keeps fresh / cache-write /
+    /// cache-read / output tokens separate rather than folding cache
+    /// counters into `input_tokens`, so billing detail survives onto the
+    /// receipt.
+    fn to_canonical_usage(&self) -> CanonicalUsage {
+        CanonicalUsage {
+            input_tokens: self.input_tokens,
+            cache_creation_tokens: self.cache_creation_input_tokens,
+            cache_read_tokens: self.cache_read_input_tokens,
+            output_tokens: self.output_tokens,
+        }
     }
 }
 
@@ -267,18 +288,42 @@ struct WireResponse {
     usage: WireUsage,
 }
 
-pub fn to_canonical_response(raw: &Value) -> Result<CanonicalResponse, ProviderError> {
+/// Parses a non-streaming response into the canonical response (content-
+/// committed via `response_blob`), the canonical provider-meta blob
+/// (SHA-256'd into `provider_meta_hash`), and the provider's own request id
+/// (task brief item 5). `service_tier` is read from the raw body since
+/// `WireResponse` doesn't model it; `inference_geo` is speculative — see
+/// `ProviderMeta`'s doc comment — Anthropic does not document this field
+/// today, so it is always `None` in practice.
+pub fn to_canonical_response(
+    raw: &Value,
+) -> Result<(CanonicalResponse, ProviderMeta, String), ProviderError> {
     let response: WireResponse = serde_json::from_value(raw.clone())
         .map_err(|error| ProviderError::Decode(error.to_string()))?;
-    Ok(CanonicalResponse {
+    let stop_reason = response.stop_reason.unwrap_or_default();
+    let provider_request_id = raw
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let meta = ProviderMeta {
+        stop_reason: stop_reason.clone(),
+        service_tier: raw
+            .get("service_tier")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        inference_geo: raw
+            .get("inference_geo")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    };
+    let canonical = CanonicalResponse {
         model: response.model,
         content: response.content.iter().map(block_to_canonical).collect(),
-        stop_reason: response.stop_reason.unwrap_or_default(),
-        usage: CanonicalUsage {
-            input_tokens: response.usage.total_input_tokens(),
-            output_tokens: response.usage.output_tokens,
-        },
-    })
+        stop_reason,
+        usage: response.usage.to_canonical_usage(),
+    };
+    Ok((canonical, meta, provider_request_id))
 }
 
 /// `stop_reason: "refusal"` is an HTTP 200 policy decline, not an error
@@ -291,32 +336,84 @@ pub fn outcome_for_stop_reason(stop_reason: &str) -> Outcome {
     }
 }
 
-fn auth_headers(request: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
-    request
-        .header("x-api-key", api_key)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("content-type", "application/json")
+/// Builds the exact headers sent upstream, plus the canonical (redacted)
+/// record of them hashed into `upstream_headers_hash` (`docs/SPEC.md` §3,
+/// task brief item 7). Building both from one pass — rather than hashing
+/// whatever `reqwest::RequestBuilder` ends up with — guarantees the hash
+/// covers exactly what this function sets, with `x-api-key` redacted to
+/// `REDACTED_HEADER_VALUE` so the hash never lets a verifier learn anything
+/// about the real key.
+fn upstream_headers(api_key: &str) -> (HeaderMap, BTreeMap<String, String>) {
+    let mut headers = HeaderMap::new();
+    let mut canonical = BTreeMap::new();
+    let mut set = |name: &'static str, value: String, secret: bool| {
+        if let Ok(header_value) = HeaderValue::from_str(&value) {
+            headers.insert(HeaderName::from_static(name), header_value);
+        }
+        canonical.insert(
+            name.to_owned(),
+            if secret {
+                REDACTED_HEADER_VALUE.to_owned()
+            } else {
+                value
+            },
+        );
+    };
+    set("x-api-key", api_key.to_owned(), true);
+    set("anthropic-version", ANTHROPIC_VERSION.to_owned(), false);
+    set("content-type", "application/json".to_owned(), false);
+    (headers, canonical)
 }
 
-/// Sends a non-streaming request upstream and returns `(status, body)`.
-/// `base_url` is an ordinary parameter, not read from config/env — see the
-/// `BASE_URL` doc comment above.
+/// Extracts `UpstreamMeta` from a live response (before its body is
+/// consumed — `Response::extensions`/`headers` borrow `&self`, so this must
+/// run before `.bytes()`/`.bytes_stream()` takes ownership).
+fn upstream_meta(
+    response: &reqwest::Response,
+    upstream_headers: BTreeMap<String, String>,
+) -> UpstreamMeta {
+    let tls_cert_sha256 = response
+        .extensions()
+        .get::<TlsInfo>()
+        .and_then(TlsInfo::peer_certificate)
+        .map(sha256)
+        .unwrap_or([0u8; 32]);
+    let request_id_header = response
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    UpstreamMeta {
+        upstream_headers,
+        tls_cert_sha256,
+        request_id_header,
+    }
+}
+
+/// Sends a non-streaming request upstream and returns `(status, body,
+/// upstream_meta)`. `base_url` is an ordinary parameter, not read from
+/// config/env — see the `BASE_URL` doc comment above.
 pub async fn call_non_streaming(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
     raw_request: &Value,
-) -> Result<(u16, Value), ProviderError> {
+) -> Result<(u16, Value, UpstreamMeta), ProviderError> {
     let mut body = raw_request.clone();
     if let Value::Object(map) = &mut body {
         map.insert("stream".to_owned(), Value::Bool(false));
     }
-    let request = auth_headers(client.post(format!("{base_url}/v1/messages")), api_key).json(&body);
+    let (headers, canonical_headers) = upstream_headers(api_key);
+    let request = client
+        .post(format!("{base_url}/v1/messages"))
+        .headers(headers)
+        .json(&body);
     let response = request
         .send()
         .await
         .map_err(|error| ProviderError::Transport(error.to_string()))?;
     let status = response.status().as_u16();
+    let meta = upstream_meta(&response, canonical_headers);
     let bytes = response
         .bytes()
         .await
@@ -327,26 +424,33 @@ pub async fn call_non_streaming(
             String::from_utf8_lossy(&bytes)
         ))
     })?;
-    Ok((status, json))
+    Ok((status, json, meta))
 }
 
-/// Sends a streaming request upstream and returns the raw response for the
-/// caller to drain via `.bytes_stream()`. `base_url` — see above.
+/// Sends a streaming request upstream and returns the raw response (for the
+/// caller to drain via `.bytes_stream()`) plus `UpstreamMeta`, captured
+/// before the body is consumed. `base_url` — see above.
 pub async fn start_streaming(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
     raw_request: &Value,
-) -> Result<reqwest::Response, ProviderError> {
+) -> Result<(reqwest::Response, UpstreamMeta), ProviderError> {
     let mut body = raw_request.clone();
     if let Value::Object(map) = &mut body {
         map.insert("stream".to_owned(), Value::Bool(true));
     }
-    let request = auth_headers(client.post(format!("{base_url}/v1/messages")), api_key).json(&body);
-    request
+    let (headers, canonical_headers) = upstream_headers(api_key);
+    let request = client
+        .post(format!("{base_url}/v1/messages"))
+        .headers(headers)
+        .json(&body);
+    let response = request
         .send()
         .await
-        .map_err(|error| ProviderError::Transport(error.to_string()))
+        .map_err(|error| ProviderError::Transport(error.to_string()))?;
+    let meta = upstream_meta(&response, canonical_headers);
+    Ok((response, meta))
 }
 
 /// Accumulates Anthropic SSE events into the same canonical response shape
@@ -361,6 +465,13 @@ pub struct StreamAccumulator {
     blocks: Vec<Option<AccBlock>>,
     stop_reason: Option<String>,
     usage: WireUsage,
+    /// `message.id` from `message_start` — the provider request id (task
+    /// brief item 5); empty when a stream is aborted before that event.
+    id: Option<String>,
+    service_tier: Option<String>,
+    /// Speculative — see `ProviderMeta`'s doc comment; not documented on
+    /// the Anthropic streaming API today, so always `None` in practice.
+    inference_geo: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -489,6 +600,21 @@ impl StreamAccumulator {
                 if let Some(model) = value.pointer("/message/model").and_then(Value::as_str) {
                     self.model = Some(model.to_owned());
                 }
+                if let Some(id) = value.pointer("/message/id").and_then(Value::as_str) {
+                    self.id = Some(id.to_owned());
+                }
+                if let Some(tier) = value
+                    .pointer("/message/service_tier")
+                    .and_then(Value::as_str)
+                {
+                    self.service_tier = Some(tier.to_owned());
+                }
+                if let Some(geo) = value
+                    .pointer("/message/inference_geo")
+                    .and_then(Value::as_str)
+                {
+                    self.inference_geo = Some(geo.to_owned());
+                }
                 if let Some(usage) = value.pointer("/message/usage") {
                     self.usage.merge_from(usage);
                 }
@@ -524,26 +650,31 @@ impl StreamAccumulator {
         }
     }
 
-    /// Finalizes accumulation into the canonical response shape. Call after
-    /// the stream ends (successfully via `message_stop`, or because the
-    /// upstream connection dropped mid-stream — either way, whatever was
-    /// accumulated so far is what gets hashed).
-    pub fn finish(self, fallback_model: &str) -> CanonicalResponse {
+    /// Finalizes accumulation into the canonical response shape, the
+    /// canonical provider-meta blob, and the provider request id. Call
+    /// after the stream ends (successfully via `message_stop`, or because
+    /// the upstream connection dropped mid-stream — either way, whatever
+    /// was accumulated so far is what gets committed).
+    pub fn finish(self, fallback_model: &str) -> (CanonicalResponse, ProviderMeta, String) {
         let content = self
             .blocks
             .into_iter()
             .flatten()
             .map(AccBlock::into_canonical)
             .collect();
-        CanonicalResponse {
+        let stop_reason = self.stop_reason.unwrap_or_default();
+        let canonical = CanonicalResponse {
             model: self.model.unwrap_or_else(|| fallback_model.to_owned()),
             content,
-            stop_reason: self.stop_reason.unwrap_or_default(),
-            usage: CanonicalUsage {
-                input_tokens: self.usage.total_input_tokens(),
-                output_tokens: self.usage.output_tokens,
-            },
-        }
+            stop_reason: stop_reason.clone(),
+            usage: self.usage.to_canonical_usage(),
+        };
+        let meta = ProviderMeta {
+            stop_reason,
+            service_tier: self.service_tier,
+            inference_geo: self.inference_geo,
+        };
+        (canonical, meta, self.id.unwrap_or_default())
     }
 }
 
@@ -637,7 +768,7 @@ mod tests {
         acc.feed(br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
 
 "#);
-        let assembled = acc.finish("m");
+        let (assembled, _meta, _id) = acc.finish("m");
         assert_eq!(
             assembled.content,
             vec![CanonicalBlock::Text {
@@ -652,15 +783,75 @@ mod tests {
         assert_eq!(outcome_for_stop_reason("end_turn"), Outcome::Ok);
     }
 
+    /// Replaces the old `ReceiptV1`-era
+    /// `cache_tokens_are_folded_into_total_input_tokens` test: `Receipt`
+    /// keeps the four usage counters separate (task brief item 6), so this
+    /// now asserts they stay separate instead of asserting they get folded.
     #[test]
-    fn cache_tokens_are_folded_into_total_input_tokens() {
+    fn usage_counters_stay_separate_not_folded() {
         let raw = serde_json::json!({
             "model": "m",
             "content": [],
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 5, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3, "output_tokens": 1}
         });
-        let response = to_canonical_response(&raw).unwrap();
-        assert_eq!(response.usage.input_tokens, 10);
+        let (response, _meta, _id) = to_canonical_response(&raw).unwrap();
+        assert_eq!(response.usage.input_tokens, 5);
+        assert_eq!(response.usage.cache_creation_tokens, 2);
+        assert_eq!(response.usage.cache_read_tokens, 3);
+        assert_eq!(response.usage.output_tokens, 1);
+    }
+
+    #[test]
+    fn provider_request_id_prefers_body_id_over_header() {
+        let raw = serde_json::json!({
+            "model": "m",
+            "id": "msg_from_body",
+            "content": [],
+            "stop_reason": "end_turn",
+            "usage": {}
+        });
+        let (_response, _meta, provider_request_id) = to_canonical_response(&raw).unwrap();
+        assert_eq!(provider_request_id, "msg_from_body");
+    }
+
+    #[test]
+    fn provider_request_id_empty_when_body_has_no_id() {
+        let raw = serde_json::json!({
+            "model": "m",
+            "content": [],
+            "stop_reason": "end_turn",
+            "usage": {}
+        });
+        let (_response, _meta, provider_request_id) = to_canonical_response(&raw).unwrap();
+        assert_eq!(provider_request_id, "");
+    }
+
+    #[test]
+    fn service_tier_is_captured_when_present() {
+        let raw = serde_json::json!({
+            "model": "m",
+            "content": [],
+            "stop_reason": "end_turn",
+            "service_tier": "standard",
+            "usage": {}
+        });
+        let (_response, meta, _id) = to_canonical_response(&raw).unwrap();
+        assert_eq!(meta.service_tier, Some("standard".to_owned()));
+        assert_eq!(meta.inference_geo, None);
+    }
+
+    #[test]
+    fn upstream_headers_redact_the_api_key_but_keep_the_version_header() {
+        let (_headers, canonical) = upstream_headers("sk-super-secret");
+        assert_eq!(
+            canonical.get("x-api-key").map(String::as_str),
+            Some(REDACTED_HEADER_VALUE)
+        );
+        assert_eq!(
+            canonical.get("anthropic-version").map(String::as_str),
+            Some(ANTHROPIC_VERSION)
+        );
+        assert!(!canonical.values().any(|v| v.contains("sk-super-secret")));
     }
 }

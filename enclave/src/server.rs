@@ -24,16 +24,33 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::auth;
-use crate::canonical::{self, CanonicalResponse, Outcome, sha256_of};
+use crate::blob;
+use crate::canonical::{CanonicalHeaders, CanonicalResponse, Outcome, ProviderMeta, sha256_of};
 use crate::config::AppConfig;
 use crate::policy::EvaluationRequest;
-use crate::providers::{ErrorResponseRecord, ProviderError, anthropic, build_http_client, openai};
-use crate::receipt::{self, ReceiptStore, ReceiptV1, StoredReceipt};
+use crate::providers::{
+    ErrorResponseRecord, ProviderError, UpstreamMeta, anthropic, build_http_client, openai,
+};
+use crate::receipt::{self, Receipt, ReceiptStore, StoredReceipt};
 
 /// 1 MiB default request body cap (`docs/SPEC.md` §4 / task brief).
 pub const DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 /// Default bound on concurrent in-flight requests.
 pub const DEFAULT_CONCURRENCY_LIMIT: usize = 16;
+
+/// `provider` discriminator values (`docs/SPEC.md` §3, task brief item 8).
+mod provider_id {
+    pub const ANTHROPIC: u8 = 0;
+    pub const OPENAI_COMPATIBLE: u8 = 1;
+}
+
+/// Shared shape of `anthropic::to_canonical_response` /
+/// `openai::to_canonical_response`: parse a raw upstream body into the
+/// canonical response (content-committed via `response_blob`), the
+/// canonical provider-meta blob (`provider_meta_hash`), and the provider's
+/// own request id (task brief item 5).
+type ToCanonicalResponseFn =
+    fn(&Value) -> Result<(CanonicalResponse, ProviderMeta, String), ProviderError>;
 
 pub(crate) struct Inner {
     ctx: NautilusContext,
@@ -228,29 +245,122 @@ async fn get_receipt(State(state): State<AppState>, Path(id): Path<String>) -> R
 
 // --- shared receipt plumbing ----------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-fn sign_and_store(
-    state: &AppState,
+/// Everything about a receipt that's fixed before we know how the upstream
+/// call turns out: which provider/host this request targeted, the
+/// request's own content commitment, and — once available — the artifacts
+/// of actually dispatching it upstream (headers sent, TLS peer, any
+/// provider request id surfaced via a response header). Built once per
+/// request and threaded into every possible exit point (success, refusal,
+/// upstream error, policy denial) so each one constructs its `Receipt` from
+/// the same source of truth instead of re-deriving pieces.
+struct CallContext {
     receipt_id: [u8; 16],
-    request_hash: [u8; 32],
-    upstream_request_hash: [u8; 32],
+    provider: u8,
+    endpoint_host: &'static str,
+    request_blob: [u8; 32],
+    upstream_request_blob: [u8; 32],
+    upstream_headers_hash: [u8; 32],
+    tls_cert_sha256: [u8; 32],
+    /// `request-id`/`x-request-id` response header, if a response was
+    /// received. Only a fallback — success/refusal paths prefer the `id`
+    /// field on the response body itself (task brief item 5).
+    provider_request_id: String,
+}
+
+impl CallContext {
+    /// For paths where no upstream call is ever attempted (policy denial,
+    /// provider not configured): no headers were sent, no TLS handshake
+    /// happened, and there is no dispatched-request transform to speak of.
+    fn no_upstream_call(
+        receipt_id: [u8; 16],
+        provider: u8,
+        endpoint_host: &'static str,
+        request_blob: [u8; 32],
+    ) -> Self {
+        let upstream_headers_hash = sha256_of(&CanonicalHeaders::new()).unwrap_or([0u8; 32]);
+        Self {
+            receipt_id,
+            provider,
+            endpoint_host,
+            request_blob,
+            upstream_request_blob: request_blob,
+            upstream_headers_hash,
+            tls_cert_sha256: [0u8; 32],
+            provider_request_id: String::new(),
+        }
+    }
+
+    /// For paths where a call was attempted and `UpstreamMeta` was
+    /// captured (headers actually sent, TLS info if a response came back).
+    fn with_upstream_meta(
+        receipt_id: [u8; 16],
+        provider: u8,
+        endpoint_host: &'static str,
+        request_blob: [u8; 32],
+        upstream_request_blob: [u8; 32],
+        meta: UpstreamMeta,
+    ) -> Self {
+        let upstream_headers_hash = sha256_of(&meta.upstream_headers).unwrap_or([0u8; 32]);
+        Self {
+            receipt_id,
+            provider,
+            endpoint_host,
+            request_blob,
+            upstream_request_blob,
+            upstream_headers_hash,
+            tls_cert_sha256: meta.tls_cert_sha256,
+            provider_request_id: meta.request_id_header.unwrap_or_default(),
+        }
+    }
+}
+
+/// All fields needed to construct+sign a `Receipt`, mirroring its field
+/// order 1:1 (`receipt.rs`) plus `outcome` as an `Outcome` rather than a
+/// bare `u8`. `timestamp_ms` is deliberately not part of this struct —
+/// `sign_and_store` reads the clock itself at the moment of signing, so
+/// every receipt's timestamp reflects when it was actually issued.
+struct ReceiptParts {
+    receipt_id: [u8; 16],
+    provider: u8,
+    endpoint_host: String,
+    tls_cert_sha256: [u8; 32],
+    request_blob: [u8; 32],
+    upstream_request_blob: [u8; 32],
+    upstream_headers_hash: [u8; 32],
     model_id: String,
-    response_hash: [u8; 32],
+    provider_request_id: String,
+    response_blob: [u8; 32],
+    provider_meta_hash: [u8; 32],
     input_tokens: u64,
+    cache_creation_tokens: u64,
+    cache_read_tokens: u64,
     output_tokens: u64,
     outcome: Outcome,
+}
+
+fn sign_and_store(
+    state: &AppState,
+    parts: ReceiptParts,
 ) -> Result<StoredReceipt, nautilus::NautilusError> {
     let timestamp_ms = current_timestamp_ms();
-    let payload = ReceiptV1 {
-        receipt_id,
+    let payload = Receipt {
+        receipt_id: parts.receipt_id,
         config_hash: state.config.config_hash,
-        request_hash,
-        upstream_request_hash,
-        model_id,
-        response_hash,
-        input_tokens,
-        output_tokens,
-        outcome: outcome.as_u8(),
+        provider: parts.provider,
+        endpoint_host: parts.endpoint_host,
+        tls_cert_sha256: parts.tls_cert_sha256,
+        request_blob: parts.request_blob,
+        upstream_request_blob: parts.upstream_request_blob,
+        upstream_headers_hash: parts.upstream_headers_hash,
+        model_id: parts.model_id,
+        provider_request_id: parts.provider_request_id,
+        response_blob: parts.response_blob,
+        provider_meta_hash: parts.provider_meta_hash,
+        input_tokens: parts.input_tokens,
+        cache_creation_tokens: parts.cache_creation_tokens,
+        cache_read_tokens: parts.cache_read_tokens,
+        output_tokens: parts.output_tokens,
+        outcome: parts.outcome.as_u8(),
     };
     let message = receipt::serialize_intent_message(&payload, timestamp_ms);
     let signature = state.ctx.sign(&message)?;
@@ -260,15 +370,18 @@ fn sign_and_store(
 }
 
 /// Builds+signs+stores an error-path receipt (`Outcome::UpstreamError` or
-/// `Outcome::PolicyDenied`) whose `response_hash` covers a small canonical
+/// `Outcome::PolicyDenied`) whose `response_blob` covers a small canonical
 /// error record rather than an absent/never-arrived response, and returns
 /// the client-facing error response with `x-receipt-id` set.
+///
+/// `provider_meta_hash` covers a default (empty) `ProviderMeta` on every
+/// error path: there is no real provider-reported `stop_reason` /
+/// `service_tier` to commit to when the call was denied, never dispatched,
+/// or failed before a body arrived.
 #[allow(clippy::too_many_arguments)]
 fn finish_error_receipt(
     state: &AppState,
-    receipt_id: [u8; 16],
-    request_hash: [u8; 32],
-    upstream_request_hash: [u8; 32],
+    ctx: &CallContext,
     model_hint: &str,
     outcome: Outcome,
     status: Option<u16>,
@@ -281,18 +394,27 @@ fn finish_error_receipt(
         status,
         message: &message,
     };
-    let response_hash = canonical::sha256_of(&record).unwrap_or([0u8; 32]);
-    match sign_and_store(
-        state,
-        receipt_id,
-        request_hash,
-        upstream_request_hash,
-        model_hint.to_owned(),
-        response_hash,
-        0,
-        0,
+    let response_blob = blob::blob_id_of(&record).unwrap_or([0u8; 32]);
+    let provider_meta_hash = sha256_of(&ProviderMeta::default()).unwrap_or([0u8; 32]);
+    let parts = ReceiptParts {
+        receipt_id: ctx.receipt_id,
+        provider: ctx.provider,
+        endpoint_host: ctx.endpoint_host.to_owned(),
+        tls_cert_sha256: ctx.tls_cert_sha256,
+        request_blob: ctx.request_blob,
+        upstream_request_blob: ctx.upstream_request_blob,
+        upstream_headers_hash: ctx.upstream_headers_hash,
+        model_id: model_hint.to_owned(),
+        provider_request_id: ctx.provider_request_id.clone(),
+        response_blob,
+        provider_meta_hash,
+        input_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        output_tokens: 0,
         outcome,
-    ) {
+    };
+    match sign_and_store(state, parts) {
         Ok(stored) => {
             let mut response = (
                 http_status,
@@ -313,25 +435,21 @@ fn finish_error_receipt(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn finish_non_streaming_ok(
     state: &AppState,
-    receipt_id: [u8; 16],
-    request_hash: [u8; 32],
-    upstream_request_hash: [u8; 32],
+    ctx: &CallContext,
     raw_response: &Value,
-    to_canonical: fn(&Value) -> Result<CanonicalResponse, ProviderError>,
+    to_canonical: ToCanonicalResponseFn,
     outcome_for: fn(&str) -> Outcome,
     model_hint: &str,
 ) -> Response {
-    let canonical_response = match to_canonical(raw_response) {
+    let (canonical_response, provider_meta, provider_request_id) = match to_canonical(raw_response)
+    {
         Ok(value) => value,
         Err(error) => {
             return finish_error_receipt(
                 state,
-                receipt_id,
-                request_hash,
-                upstream_request_hash,
+                ctx,
                 model_hint,
                 Outcome::UpstreamError,
                 None,
@@ -342,7 +460,17 @@ fn finish_non_streaming_ok(
         }
     };
     let outcome = outcome_for(&canonical_response.stop_reason);
-    let response_hash = match sha256_of(&canonical_response) {
+    let response_blob = match blob::blob_id_of(&canonical_response) {
+        Ok(blob) => blob,
+        Err(error) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                error.to_string(),
+            );
+        }
+    };
+    let provider_meta_hash = match sha256_of(&provider_meta) {
         Ok(hash) => hash,
         Err(error) => {
             return error_response(
@@ -352,17 +480,33 @@ fn finish_non_streaming_ok(
             );
         }
     };
-    match sign_and_store(
-        state,
-        receipt_id,
-        request_hash,
-        upstream_request_hash,
-        canonical_response.model.clone(),
-        response_hash,
-        canonical_response.usage.input_tokens,
-        canonical_response.usage.output_tokens,
+    // Task brief item 5: prefer the body `id`, fall back to the
+    // `request-id`-style response header captured in `ctx`, empty string
+    // if neither is present.
+    let provider_request_id = if provider_request_id.is_empty() {
+        ctx.provider_request_id.clone()
+    } else {
+        provider_request_id
+    };
+    let parts = ReceiptParts {
+        receipt_id: ctx.receipt_id,
+        provider: ctx.provider,
+        endpoint_host: ctx.endpoint_host.to_owned(),
+        tls_cert_sha256: ctx.tls_cert_sha256,
+        request_blob: ctx.request_blob,
+        upstream_request_blob: ctx.upstream_request_blob,
+        upstream_headers_hash: ctx.upstream_headers_hash,
+        model_id: canonical_response.model.clone(),
+        provider_request_id,
+        response_blob,
+        provider_meta_hash,
+        input_tokens: canonical_response.usage.input_tokens,
+        cache_creation_tokens: canonical_response.usage.cache_creation_tokens,
+        cache_read_tokens: canonical_response.usage.cache_read_tokens,
+        output_tokens: canonical_response.usage.output_tokens,
         outcome,
-    ) {
+    };
+    match sign_and_store(state, parts) {
         Ok(stored) => {
             let mut response = Json(raw_response.clone()).into_response();
             insert_receipt_header(&mut response, &stored.receipt_id);
@@ -405,8 +549,8 @@ async fn chat_completions(
             return error_response(StatusCode::BAD_REQUEST, "bad_request", error.to_string());
         }
     };
-    let request_hash = match sha256_of(&canonical_request) {
-        Ok(hash) => hash,
+    let request_blob = match blob::blob_id_of(&canonical_request) {
+        Ok(blob) => blob,
         Err(error) => {
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -425,11 +569,15 @@ async fn chat_completions(
         request_bytes: body.len(),
     }) {
         // No upstream call is made on a policy denial.
+        let ctx = CallContext::no_upstream_call(
+            receipt_id,
+            provider_id::OPENAI_COMPATIBLE,
+            openai::HOST,
+            request_blob,
+        );
         return finish_error_receipt(
             &state,
-            receipt_id,
-            request_hash,
-            request_hash,
+            &ctx,
             &model_hint,
             Outcome::PolicyDenied,
             None,
@@ -451,7 +599,7 @@ async fn chat_completions(
         return openai_stream_response(
             state,
             receipt_id,
-            request_hash,
+            request_blob,
             api_key,
             raw_request,
             model_hint,
@@ -462,62 +610,88 @@ async fn chat_completions(
     match openai::call_non_streaming(&state.http, &state.openai_base_url, &api_key, &raw_request)
         .await
     {
-        Ok((status, response_body)) if (200..300).contains(&status) => finish_non_streaming_ok(
-            &state,
-            receipt_id,
-            request_hash,
-            request_hash,
-            &response_body,
-            openai::to_canonical_response,
-            openai::outcome_for_finish_reason,
-            &model_hint,
-        ),
-        Ok((status, response_body)) => finish_error_receipt(
-            &state,
-            receipt_id,
-            request_hash,
-            request_hash,
-            &model_hint,
-            Outcome::UpstreamError,
-            Some(status),
-            response_body.to_string(),
-            StatusCode::BAD_GATEWAY,
-            "upstream_error",
-        ),
-        Err(error) => finish_error_receipt(
-            &state,
-            receipt_id,
-            request_hash,
-            request_hash,
-            &model_hint,
-            Outcome::UpstreamError,
-            None,
-            error.to_string(),
-            StatusCode::BAD_GATEWAY,
-            "upstream_error",
-        ),
+        Ok((status, response_body, meta)) if (200..300).contains(&status) => {
+            let ctx = CallContext::with_upstream_meta(
+                receipt_id,
+                provider_id::OPENAI_COMPATIBLE,
+                openai::HOST,
+                request_blob,
+                request_blob,
+                meta,
+            );
+            finish_non_streaming_ok(
+                &state,
+                &ctx,
+                &response_body,
+                openai::to_canonical_response,
+                openai::outcome_for_finish_reason,
+                &model_hint,
+            )
+        }
+        Ok((status, response_body, meta)) => {
+            let ctx = CallContext::with_upstream_meta(
+                receipt_id,
+                provider_id::OPENAI_COMPATIBLE,
+                openai::HOST,
+                request_blob,
+                request_blob,
+                meta,
+            );
+            finish_error_receipt(
+                &state,
+                &ctx,
+                &model_hint,
+                Outcome::UpstreamError,
+                Some(status),
+                response_body.to_string(),
+                StatusCode::BAD_GATEWAY,
+                "upstream_error",
+            )
+        }
+        Err(error) => {
+            let ctx = CallContext::no_upstream_call(
+                receipt_id,
+                provider_id::OPENAI_COMPATIBLE,
+                openai::HOST,
+                request_blob,
+            );
+            finish_error_receipt(
+                &state,
+                &ctx,
+                &model_hint,
+                Outcome::UpstreamError,
+                None,
+                error.to_string(),
+                StatusCode::BAD_GATEWAY,
+                "upstream_error",
+            )
+        }
     }
 }
 
 async fn openai_stream_response(
     state: AppState,
     receipt_id: [u8; 16],
-    request_hash: [u8; 32],
+    request_blob: [u8; 32],
     api_key: String,
     raw_request: Value,
     model_hint: String,
 ) -> Response {
-    let (upstream, dispatched_body) =
+    let (upstream, dispatched_body, meta) =
         match openai::start_streaming(&state.http, &state.openai_base_url, &api_key, &raw_request)
             .await
         {
             Ok(value) => value,
             Err(error) => {
+                let ctx = CallContext::no_upstream_call(
+                    receipt_id,
+                    provider_id::OPENAI_COMPATIBLE,
+                    openai::HOST,
+                    request_blob,
+                );
                 return finish_error_receipt(
                     &state,
-                    receipt_id,
-                    request_hash,
-                    request_hash,
+                    &ctx,
                     &model_hint,
                     Outcome::UpstreamError,
                     None,
@@ -528,18 +702,24 @@ async fn openai_stream_response(
             }
         };
     // Forcing `stream_options.include_usage` is a genuine gateway transform
-    // (provider-apis.md §4), so `upstream_request_hash` is computed from
-    // what was actually dispatched, separately from `request_hash`.
-    let upstream_request_hash = sha256_of(&dispatched_body).unwrap_or(request_hash);
+    // (provider-apis.md §4), so `upstream_request_blob` is computed from
+    // what was actually dispatched, separately from `request_blob`.
+    let upstream_request_blob = blob::blob_id_of(&dispatched_body).unwrap_or(request_blob);
+    let ctx = CallContext::with_upstream_meta(
+        receipt_id,
+        provider_id::OPENAI_COMPATIBLE,
+        openai::HOST,
+        request_blob,
+        upstream_request_blob,
+        meta,
+    );
 
     if !upstream.status().is_success() {
         let status = upstream.status().as_u16();
         let body_text = upstream.text().await.unwrap_or_default();
         return finish_error_receipt(
             &state,
-            receipt_id,
-            request_hash,
-            upstream_request_hash,
+            &ctx,
             &model_hint,
             Outcome::UpstreamError,
             Some(status),
@@ -567,24 +747,40 @@ async fn openai_stream_response(
                 }
             }
         }
-        let canonical_response = acc.finish(&model_hint);
+        let (canonical_response, provider_meta, provider_request_id) = acc.finish(&model_hint);
         let outcome = if had_transport_error {
             Outcome::UpstreamError
         } else {
             openai::outcome_for_finish_reason(&canonical_response.stop_reason)
         };
-        if let Ok(response_hash) = sha256_of(&canonical_response) {
-            let _ = sign_and_store(
-                &state,
-                receipt_id,
-                request_hash,
-                upstream_request_hash,
-                canonical_response.model.clone(),
-                response_hash,
-                canonical_response.usage.input_tokens,
-                canonical_response.usage.output_tokens,
+        let provider_request_id = if provider_request_id.is_empty() {
+            ctx.provider_request_id.clone()
+        } else {
+            provider_request_id
+        };
+        if let (Ok(response_blob), Ok(provider_meta_hash)) = (
+            blob::blob_id_of(&canonical_response),
+            sha256_of(&provider_meta),
+        ) {
+            let parts = ReceiptParts {
+                receipt_id: ctx.receipt_id,
+                provider: ctx.provider,
+                endpoint_host: ctx.endpoint_host.to_owned(),
+                tls_cert_sha256: ctx.tls_cert_sha256,
+                request_blob: ctx.request_blob,
+                upstream_request_blob: ctx.upstream_request_blob,
+                upstream_headers_hash: ctx.upstream_headers_hash,
+                model_id: canonical_response.model.clone(),
+                provider_request_id,
+                response_blob,
+                provider_meta_hash,
+                input_tokens: canonical_response.usage.input_tokens,
+                cache_creation_tokens: canonical_response.usage.cache_creation_tokens,
+                cache_read_tokens: canonical_response.usage.cache_read_tokens,
+                output_tokens: canonical_response.usage.output_tokens,
                 outcome,
-            );
+            };
+            let _ = sign_and_store(&state, parts);
         }
     };
 
@@ -627,8 +823,8 @@ async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes
             return error_response(StatusCode::BAD_REQUEST, "bad_request", error.to_string());
         }
     };
-    let request_hash = match sha256_of(&canonical_request) {
-        Ok(hash) => hash,
+    let request_blob = match blob::blob_id_of(&canonical_request) {
+        Ok(blob) => blob,
         Err(error) => {
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -646,11 +842,15 @@ async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes
         max_tokens: canonical_request.max_tokens,
         request_bytes: body.len(),
     }) {
+        let ctx = CallContext::no_upstream_call(
+            receipt_id,
+            provider_id::ANTHROPIC,
+            anthropic::HOST,
+            request_blob,
+        );
         return finish_error_receipt(
             &state,
-            receipt_id,
-            request_hash,
-            request_hash,
+            &ctx,
             &model_hint,
             Outcome::PolicyDenied,
             None,
@@ -672,7 +872,7 @@ async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes
         return anthropic_stream_response(
             state,
             receipt_id,
-            request_hash,
+            request_blob,
             api_key,
             raw_request,
             model_hint,
@@ -688,52 +888,74 @@ async fn messages(State(state): State<AppState>, headers: HeaderMap, body: Bytes
     )
     .await
     {
-        Ok((status, response_body)) if (200..300).contains(&status) => finish_non_streaming_ok(
-            &state,
-            receipt_id,
-            request_hash,
-            request_hash,
-            &response_body,
-            anthropic::to_canonical_response,
-            anthropic::outcome_for_stop_reason,
-            &model_hint,
-        ),
-        Ok((status, response_body)) => finish_error_receipt(
-            &state,
-            receipt_id,
-            request_hash,
-            request_hash,
-            &model_hint,
-            Outcome::UpstreamError,
-            Some(status),
-            response_body.to_string(),
-            StatusCode::BAD_GATEWAY,
-            "upstream_error",
-        ),
-        Err(error) => finish_error_receipt(
-            &state,
-            receipt_id,
-            request_hash,
-            request_hash,
-            &model_hint,
-            Outcome::UpstreamError,
-            None,
-            error.to_string(),
-            StatusCode::BAD_GATEWAY,
-            "upstream_error",
-        ),
+        Ok((status, response_body, meta)) if (200..300).contains(&status) => {
+            let ctx = CallContext::with_upstream_meta(
+                receipt_id,
+                provider_id::ANTHROPIC,
+                anthropic::HOST,
+                request_blob,
+                request_blob,
+                meta,
+            );
+            finish_non_streaming_ok(
+                &state,
+                &ctx,
+                &response_body,
+                anthropic::to_canonical_response,
+                anthropic::outcome_for_stop_reason,
+                &model_hint,
+            )
+        }
+        Ok((status, response_body, meta)) => {
+            let ctx = CallContext::with_upstream_meta(
+                receipt_id,
+                provider_id::ANTHROPIC,
+                anthropic::HOST,
+                request_blob,
+                request_blob,
+                meta,
+            );
+            finish_error_receipt(
+                &state,
+                &ctx,
+                &model_hint,
+                Outcome::UpstreamError,
+                Some(status),
+                response_body.to_string(),
+                StatusCode::BAD_GATEWAY,
+                "upstream_error",
+            )
+        }
+        Err(error) => {
+            let ctx = CallContext::no_upstream_call(
+                receipt_id,
+                provider_id::ANTHROPIC,
+                anthropic::HOST,
+                request_blob,
+            );
+            finish_error_receipt(
+                &state,
+                &ctx,
+                &model_hint,
+                Outcome::UpstreamError,
+                None,
+                error.to_string(),
+                StatusCode::BAD_GATEWAY,
+                "upstream_error",
+            )
+        }
     }
 }
 
 async fn anthropic_stream_response(
     state: AppState,
     receipt_id: [u8; 16],
-    request_hash: [u8; 32],
+    request_blob: [u8; 32],
     api_key: String,
     raw_request: Value,
     model_hint: String,
 ) -> Response {
-    let upstream = match anthropic::start_streaming(
+    let (upstream, meta) = match anthropic::start_streaming(
         &state.http,
         &state.anthropic_base_url,
         &api_key,
@@ -743,11 +965,15 @@ async fn anthropic_stream_response(
     {
         Ok(value) => value,
         Err(error) => {
+            let ctx = CallContext::no_upstream_call(
+                receipt_id,
+                provider_id::ANTHROPIC,
+                anthropic::HOST,
+                request_blob,
+            );
             return finish_error_receipt(
                 &state,
-                receipt_id,
-                request_hash,
-                request_hash,
+                &ctx,
                 &model_hint,
                 Outcome::UpstreamError,
                 None,
@@ -759,17 +985,22 @@ async fn anthropic_stream_response(
     };
     // v1 performs no request-mutating transform for the Anthropic surface
     // beyond normalizing `stream` (transport-only, excluded from hashing),
-    // so upstream_request_hash == request_hash today. See task report.
-    let upstream_request_hash = request_hash;
+    // so upstream_request_blob == request_blob today. See task report.
+    let ctx = CallContext::with_upstream_meta(
+        receipt_id,
+        provider_id::ANTHROPIC,
+        anthropic::HOST,
+        request_blob,
+        request_blob,
+        meta,
+    );
 
     if !upstream.status().is_success() {
         let status = upstream.status().as_u16();
         let body_text = upstream.text().await.unwrap_or_default();
         return finish_error_receipt(
             &state,
-            receipt_id,
-            request_hash,
-            upstream_request_hash,
+            &ctx,
             &model_hint,
             Outcome::UpstreamError,
             Some(status),
@@ -797,24 +1028,40 @@ async fn anthropic_stream_response(
                 }
             }
         }
-        let canonical_response = acc.finish(&model_hint);
+        let (canonical_response, provider_meta, provider_request_id) = acc.finish(&model_hint);
         let outcome = if had_transport_error {
             Outcome::UpstreamError
         } else {
             anthropic::outcome_for_stop_reason(&canonical_response.stop_reason)
         };
-        if let Ok(response_hash) = sha256_of(&canonical_response) {
-            let _ = sign_and_store(
-                &state,
-                receipt_id,
-                request_hash,
-                upstream_request_hash,
-                canonical_response.model.clone(),
-                response_hash,
-                canonical_response.usage.input_tokens,
-                canonical_response.usage.output_tokens,
+        let provider_request_id = if provider_request_id.is_empty() {
+            ctx.provider_request_id.clone()
+        } else {
+            provider_request_id
+        };
+        if let (Ok(response_blob), Ok(provider_meta_hash)) = (
+            blob::blob_id_of(&canonical_response),
+            sha256_of(&provider_meta),
+        ) {
+            let parts = ReceiptParts {
+                receipt_id: ctx.receipt_id,
+                provider: ctx.provider,
+                endpoint_host: ctx.endpoint_host.to_owned(),
+                tls_cert_sha256: ctx.tls_cert_sha256,
+                request_blob: ctx.request_blob,
+                upstream_request_blob: ctx.upstream_request_blob,
+                upstream_headers_hash: ctx.upstream_headers_hash,
+                model_id: canonical_response.model.clone(),
+                provider_request_id,
+                response_blob,
+                provider_meta_hash,
+                input_tokens: canonical_response.usage.input_tokens,
+                cache_creation_tokens: canonical_response.usage.cache_creation_tokens,
+                cache_read_tokens: canonical_response.usage.cache_read_tokens,
+                output_tokens: canonical_response.usage.output_tokens,
                 outcome,
-            );
+            };
+            let _ = sign_and_store(&state, parts);
         }
     };
 
@@ -1043,6 +1290,65 @@ mod tests {
         assert_eq!(receipt_response.status(), StatusCode::OK);
         let receipt_json = response_json(receipt_response).await;
         assert_eq!(receipt_json["outcome"], 1);
+        // provider=1 (openai-compatible), task brief item 8.
+        assert_eq!(receipt_json["provider"], 1);
+        assert_eq!(receipt_json["endpoint_host"], "api.openai.com");
+        assert_eq!(receipt_json["provider_request_id"], "chatcmpl-1");
+        // wiremock speaks plain HTTP, so no TLS handshake ever happens —
+        // `tls_cert_sha256` falls back to the documented all-zero sentinel.
+        assert_eq!(receipt_json["tls_cert_sha256"], hex::encode([0u8; 32]));
+    }
+
+    #[tokio::test]
+    async fn usage_counters_are_reported_separately_not_folded() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "chatcmpl-2",
+                "model": "gpt-5.2",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 10, "prompt_tokens_details": {"cached_tokens": 40}}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app_router = test_app(test_config(allow_all_policy()), &mock_server.uri());
+        let response = app_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("authorization", "Bearer sk-caller")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt_id = response
+            .headers()
+            .get("x-receipt-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        let receipt_response = app_router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/receipts/{receipt_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt_json = response_json(receipt_response).await;
+        assert_eq!(receipt_json["input_tokens"], 60);
+        assert_eq!(receipt_json["cache_creation_tokens"], 0);
+        assert_eq!(receipt_json["cache_read_tokens"], 40);
+        assert_eq!(receipt_json["output_tokens"], 10);
     }
 
     #[tokio::test]
@@ -1204,5 +1510,66 @@ mod tests {
         assert_eq!(receipt_response.status(), StatusCode::OK);
         let receipt_json = response_json(receipt_response).await;
         assert_eq!(receipt_json["outcome"], 2);
+        // `id` from the one chunk that did arrive should still be recorded.
+        assert_eq!(receipt_json["provider_request_id"], "1");
+    }
+
+    #[tokio::test]
+    async fn anthropic_success_receipt_has_provider_0_and_correct_host() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "hi"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 2}
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let app_router = test_app(test_config(allow_all_policy()), &mock_server.uri());
+        let response = app_router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/messages")
+                    .header("authorization", "Bearer sk-caller")
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"model": "claude-sonnet-5", "max_tokens": 100, "messages": [{"role": "user", "content": "hi"}]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let receipt_id = response
+            .headers()
+            .get("x-receipt-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        let receipt_response = app_router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/receipts/{receipt_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let receipt_json = response_json(receipt_response).await;
+        assert_eq!(receipt_json["outcome"], 0);
+        assert_eq!(receipt_json["provider"], 0);
+        assert_eq!(receipt_json["endpoint_host"], "api.anthropic.com");
+        assert_eq!(receipt_json["provider_request_id"], "msg_1");
+        // Non-empty request/response bodies must produce a real
+        // (non-zero) locally-computed Walrus blob id, not the "not
+        // archived" sentinel.
+        assert_ne!(receipt_json["request_blob"], hex::encode([0u8; 32]));
+        assert_ne!(receipt_json["response_blob"], hex::encode([0u8; 32]));
     }
 }

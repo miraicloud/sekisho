@@ -4,15 +4,19 @@
 //! they mirror this same wire shape — which concrete host is dialed is
 //! fixed by `BASE_URL` at build time (see its doc comment).
 
+use std::collections::BTreeMap;
+
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::tls::TlsInfo;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::canonical::{
     CanonicalBlock, CanonicalMessage, CanonicalRequest, CanonicalResponse, CanonicalRole,
-    CanonicalToolDef, CanonicalUsage, Outcome, sha256,
+    CanonicalToolDef, CanonicalUsage, Outcome, ProviderMeta, sha256,
 };
 
-use super::ProviderError;
+use super::{ProviderError, REDACTED_HEADER_VALUE, UpstreamMeta};
 
 /// PCR-measured provider endpoint (`docs/SPEC.md` §4, load-bearing security
 /// property) — see `providers::anthropic::BASE_URL` doc comment for the
@@ -20,6 +24,15 @@ use super::ProviderError;
 /// on the call functions below, not read from config/env); identical
 /// reasoning applies here.
 pub const BASE_URL: &str = "https://api.openai.com";
+/// `endpoint_host` for every receipt this adapter produces (`docs/SPEC.md`
+/// §3, task brief item 4) — see `providers::anthropic::HOST`.
+pub const HOST: &str = "api.openai.com";
+
+/// Response header this adapter falls back to for `provider_request_id`
+/// when the response body carries no `id` field — see
+/// `providers::anthropic::REQUEST_ID_HEADER`. OpenAI documents
+/// `x-request-id` as the header carrying its own request identifier.
+const REQUEST_ID_HEADER: &str = "x-request-id";
 
 #[derive(Debug, Clone, Deserialize)]
 struct WireRequestFields {
@@ -80,6 +93,43 @@ struct WireUsage {
     prompt_tokens: u64,
     #[serde(default)]
     completion_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: Option<WirePromptTokensDetails>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct WirePromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u64,
+}
+
+impl WireUsage {
+    /// Maps OpenAI's usage shape onto `CanonicalUsage` (`docs/SPEC.md` §3,
+    /// task brief item 6). OpenAI has no "cache creation" concept — prompt
+    /// caching there is automatic and reported only as a portion of
+    /// `prompt_tokens` already billed at the cached rate
+    /// (`usage.prompt_tokens_details.cached_tokens`), unlike Anthropic's
+    /// mutually-exclusive `cache_creation_input_tokens` /
+    /// `cache_read_input_tokens` counters that are additional to
+    /// `input_tokens`. So for provider=1 receipts, `cache_creation_tokens`
+    /// is always 0, `cache_read_tokens` is the cached portion, and
+    /// `input_tokens` is `prompt_tokens` minus that cached portion — the
+    /// four counters sum to the provider's total token accounting, mirroring
+    /// Anthropic's additive semantics rather than double-counting.
+    /// Documented deviation — see task report.
+    fn to_canonical_usage(&self) -> CanonicalUsage {
+        let cache_read_tokens = self
+            .prompt_tokens_details
+            .as_ref()
+            .map(|details| details.cached_tokens)
+            .unwrap_or(0);
+        CanonicalUsage {
+            input_tokens: self.prompt_tokens.saturating_sub(cache_read_tokens),
+            cache_creation_tokens: 0,
+            cache_read_tokens,
+            output_tokens: self.completion_tokens,
+        }
+    }
 }
 
 /// Descriptor for content we don't model precisely (multimodal parts other
@@ -227,7 +277,14 @@ struct WireResponse {
     usage: WireUsage,
 }
 
-pub fn to_canonical_response(raw: &Value) -> Result<CanonicalResponse, ProviderError> {
+/// Parses a non-streaming response into the canonical response (content-
+/// committed via `response_blob`), the canonical provider-meta blob
+/// (SHA-256'd into `provider_meta_hash`), and the provider's own request id
+/// (task brief item 5). `service_tier` is a real OpenAI response field;
+/// `inference_geo` is speculative — see `ProviderMeta`'s doc comment.
+pub fn to_canonical_response(
+    raw: &Value,
+) -> Result<(CanonicalResponse, ProviderMeta, String), ProviderError> {
     let response: WireResponse = serde_json::from_value(raw.clone())
         .map_err(|error| ProviderError::Decode(error.to_string()))?;
     let choice = response.choices.first();
@@ -238,17 +295,32 @@ pub fn to_canonical_response(raw: &Value) -> Result<CanonicalResponse, ProviderE
     if let Some(tool_calls) = choice.and_then(|c| c.message.tool_calls.as_ref()) {
         content.extend(tool_calls.iter().map(tool_call_to_block));
     }
-    Ok(CanonicalResponse {
+    let stop_reason = choice
+        .and_then(|c| c.finish_reason.clone())
+        .unwrap_or_default();
+    let provider_request_id = raw
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let meta = ProviderMeta {
+        stop_reason: stop_reason.clone(),
+        service_tier: raw
+            .get("service_tier")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        inference_geo: raw
+            .get("inference_geo")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    };
+    let canonical = CanonicalResponse {
         model: response.model,
         content,
-        stop_reason: choice
-            .and_then(|c| c.finish_reason.clone())
-            .unwrap_or_default(),
-        usage: CanonicalUsage {
-            input_tokens: response.usage.prompt_tokens,
-            output_tokens: response.usage.completion_tokens,
-        },
-    })
+        stop_reason,
+        usage: response.usage.to_canonical_usage(),
+    };
+    Ok((canonical, meta, provider_request_id))
 }
 
 /// `finish_reason: "content_filter"` is the OpenAI-shape analog of
@@ -262,10 +334,52 @@ pub fn outcome_for_finish_reason(finish_reason: &str) -> Outcome {
     }
 }
 
-fn auth_headers(request: reqwest::RequestBuilder, api_key: &str) -> reqwest::RequestBuilder {
-    request
-        .header("authorization", format!("Bearer {api_key}"))
-        .header("content-type", "application/json")
+/// Builds the exact headers sent upstream, plus the canonical (redacted)
+/// record of them hashed into `upstream_headers_hash` — see
+/// `providers::anthropic::upstream_headers` for the full rationale.
+fn upstream_headers(api_key: &str) -> (HeaderMap, BTreeMap<String, String>) {
+    let mut headers = HeaderMap::new();
+    let mut canonical = BTreeMap::new();
+    let mut set = |name: &'static str, value: String, secret: bool| {
+        if let Ok(header_value) = HeaderValue::from_str(&value) {
+            headers.insert(HeaderName::from_static(name), header_value);
+        }
+        canonical.insert(
+            name.to_owned(),
+            if secret {
+                REDACTED_HEADER_VALUE.to_owned()
+            } else {
+                value
+            },
+        );
+    };
+    set("authorization", format!("Bearer {api_key}"), true);
+    set("content-type", "application/json".to_owned(), false);
+    (headers, canonical)
+}
+
+/// Extracts `UpstreamMeta` from a live response before its body is consumed
+/// — see `providers::anthropic::upstream_meta`.
+fn upstream_meta(
+    response: &reqwest::Response,
+    upstream_headers: BTreeMap<String, String>,
+) -> UpstreamMeta {
+    let tls_cert_sha256 = response
+        .extensions()
+        .get::<TlsInfo>()
+        .and_then(TlsInfo::peer_certificate)
+        .map(sha256)
+        .unwrap_or([0u8; 32]);
+    let request_id_header = response
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    UpstreamMeta {
+        upstream_headers,
+        tls_cert_sha256,
+        request_id_header,
+    }
 }
 
 /// `base_url` is an ordinary parameter, not read from config/env — see the
@@ -275,21 +389,22 @@ pub async fn call_non_streaming(
     base_url: &str,
     api_key: &str,
     raw_request: &Value,
-) -> Result<(u16, Value), ProviderError> {
+) -> Result<(u16, Value, UpstreamMeta), ProviderError> {
     let mut body = raw_request.clone();
     if let Value::Object(map) = &mut body {
         map.insert("stream".to_owned(), Value::Bool(false));
     }
-    let request = auth_headers(
-        client.post(format!("{base_url}/v1/chat/completions")),
-        api_key,
-    )
-    .json(&body);
+    let (headers, canonical_headers) = upstream_headers(api_key);
+    let request = client
+        .post(format!("{base_url}/v1/chat/completions"))
+        .headers(headers)
+        .json(&body);
     let response = request
         .send()
         .await
         .map_err(|error| ProviderError::Transport(error.to_string()))?;
     let status = response.status().as_u16();
+    let meta = upstream_meta(&response, canonical_headers);
     let bytes = response
         .bytes()
         .await
@@ -300,21 +415,21 @@ pub async fn call_non_streaming(
             String::from_utf8_lossy(&bytes)
         ))
     })?;
-    Ok((status, json))
+    Ok((status, json, meta))
 }
 
 /// Sends a streaming request. Forces `stream_options.include_usage = true`
 /// — a genuine gateway transform (provider-apis.md §4: "a relay must
 /// request it explicitly on every streamed call if the receipt needs token
-/// counts"), which is why this is `start_streaming(..) -> (Response, Value)`:
-/// the returned `Value` is what was actually dispatched, for
-/// `upstream_request_hash`.
+/// counts"), which is why the dispatched `Value` is returned alongside the
+/// response: it's what `upstream_request_blob` is computed from, separately
+/// from `request_blob`.
 pub async fn start_streaming(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
     raw_request: &Value,
-) -> Result<(reqwest::Response, Value), ProviderError> {
+) -> Result<(reqwest::Response, Value, UpstreamMeta), ProviderError> {
     let mut body = raw_request.clone();
     if let Value::Object(map) = &mut body {
         map.insert("stream".to_owned(), Value::Bool(true));
@@ -323,16 +438,17 @@ pub async fn start_streaming(
             serde_json::json!({"include_usage": true}),
         );
     }
-    let request = auth_headers(
-        client.post(format!("{base_url}/v1/chat/completions")),
-        api_key,
-    )
-    .json(&body);
+    let (headers, canonical_headers) = upstream_headers(api_key);
+    let request = client
+        .post(format!("{base_url}/v1/chat/completions"))
+        .headers(headers)
+        .json(&body);
     let response = request
         .send()
         .await
         .map_err(|error| ProviderError::Transport(error.to_string()))?;
-    Ok((response, body))
+    let meta = upstream_meta(&response, canonical_headers);
+    Ok((response, body, meta))
 }
 
 /// Accumulates OpenAI-shape SSE chunks into the canonical response shape.
@@ -348,6 +464,14 @@ pub struct StreamAccumulator {
     finish_reason: Option<String>,
     usage: WireUsage,
     done: bool,
+    /// Top-level chunk `id` (`chatcmpl-...`) — the provider request id
+    /// (task brief item 5); empty when a stream is aborted before the
+    /// first chunk.
+    id: Option<String>,
+    service_tier: Option<String>,
+    /// Speculative — see `ProviderMeta`'s doc comment; not documented on
+    /// the OpenAI streaming API today, so always `None` in practice.
+    inference_geo: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -391,6 +515,15 @@ impl StreamAccumulator {
         if let Some(model) = value.get("model").and_then(Value::as_str) {
             self.model = Some(model.to_owned());
         }
+        if let Some(id) = value.get("id").and_then(Value::as_str) {
+            self.id = Some(id.to_owned());
+        }
+        if let Some(tier) = value.get("service_tier").and_then(Value::as_str) {
+            self.service_tier = Some(tier.to_owned());
+        }
+        if let Some(geo) = value.get("inference_geo").and_then(Value::as_str) {
+            self.inference_geo = Some(geo.to_owned());
+        }
         if let Some(usage) = value.get("usage")
             && let Ok(parsed) = serde_json::from_value::<WireUsage>(usage.clone())
         {
@@ -430,7 +563,7 @@ impl StreamAccumulator {
         }
     }
 
-    pub fn finish(self, fallback_model: &str) -> CanonicalResponse {
+    pub fn finish(self, fallback_model: &str) -> (CanonicalResponse, ProviderMeta, String) {
         let mut content = Vec::new();
         if !self.text.is_empty() {
             content.push(CanonicalBlock::Text { text: self.text });
@@ -448,15 +581,19 @@ impl StreamAccumulator {
                 input,
             });
         }
-        CanonicalResponse {
+        let stop_reason = self.finish_reason.unwrap_or_default();
+        let canonical = CanonicalResponse {
             model: self.model.unwrap_or_else(|| fallback_model.to_owned()),
             content,
-            stop_reason: self.finish_reason.unwrap_or_default(),
-            usage: CanonicalUsage {
-                input_tokens: self.usage.prompt_tokens,
-                output_tokens: self.usage.completion_tokens,
-            },
-        }
+            stop_reason: stop_reason.clone(),
+            usage: self.usage.to_canonical_usage(),
+        };
+        let meta = ProviderMeta {
+            stop_reason,
+            service_tier: self.service_tier,
+            inference_geo: self.inference_geo,
+        };
+        (canonical, meta, self.id.unwrap_or_default())
     }
 }
 
@@ -531,6 +668,7 @@ mod tests {
     #[test]
     fn stream_accumulator_matches_non_streaming_for_same_content() {
         let non_streaming_response = serde_json::json!({
+            "id": "1",
             "model": "gpt-5.2",
             "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello, world!"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 7, "completion_tokens": 3}
@@ -565,7 +703,7 @@ mod tests {
         for line in lines {
             acc.feed(format!("data: {line}\n").as_bytes());
         }
-        let assembled = acc.finish("m");
+        let (assembled, _meta, _id) = acc.finish("m");
         assert_eq!(
             assembled.content,
             vec![CanonicalBlock::ToolUse {
@@ -574,5 +712,46 @@ mod tests {
                 input: serde_json::json!({"city": "NYC"}),
             }]
         );
+    }
+
+    /// Documents the deviation in `WireUsage::to_canonical_usage`: OpenAI
+    /// has no "cache creation" concept, so `cache_creation_tokens` is
+    /// always 0 and `cache_read_tokens` comes from
+    /// `prompt_tokens_details.cached_tokens`, subtracted out of
+    /// `input_tokens` so the four counters stay additive like Anthropic's.
+    #[test]
+    fn cached_tokens_are_split_out_of_prompt_tokens_not_double_counted() {
+        let raw = serde_json::json!({
+            "model": "m",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10, "prompt_tokens_details": {"cached_tokens": 40}}
+        });
+        let (response, _meta, _id) = to_canonical_response(&raw).unwrap();
+        assert_eq!(response.usage.input_tokens, 60);
+        assert_eq!(response.usage.cache_creation_tokens, 0);
+        assert_eq!(response.usage.cache_read_tokens, 40);
+        assert_eq!(response.usage.output_tokens, 10);
+    }
+
+    #[test]
+    fn provider_request_id_prefers_body_id() {
+        let raw = serde_json::json!({
+            "id": "chatcmpl-abc",
+            "model": "m",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {}
+        });
+        let (_response, _meta, provider_request_id) = to_canonical_response(&raw).unwrap();
+        assert_eq!(provider_request_id, "chatcmpl-abc");
+    }
+
+    #[test]
+    fn upstream_headers_redact_the_bearer_token() {
+        let (_headers, canonical) = upstream_headers("sk-super-secret");
+        assert_eq!(
+            canonical.get("authorization").map(String::as_str),
+            Some(REDACTED_HEADER_VALUE)
+        );
+        assert!(!canonical.values().any(|v| v.contains("sk-super-secret")));
     }
 }
