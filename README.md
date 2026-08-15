@@ -96,6 +96,18 @@ Step-by-step runbooks, including failure modes, live in
 [`.claude/skills/register-enclave.md`](.claude/skills/register-enclave.md) and
 [`.claude/skills/rotate-keys.md`](.claude/skills/rotate-keys.md).
 
+## Reading a certificate
+
+`app/` is a static viewer: paste a transaction digest and it decodes the `ReceiptVerified` event
+from its canonical BCS, cross-checks the gateway and code version against live chain state, and
+renders what the transaction actually proves — alongside an explicit statement of what it doesn't.
+
+```bash
+cd app && bun install && bun run dev
+```
+
+It talks to a public Sui fullnode directly over gRPC, so there is no backend to run or trust.
+
 ## Verifying someone else's deployment
 
 This is the whole point, in one command:
@@ -116,6 +128,7 @@ Each check reports PASS or FAIL independently.
 | `move/` | Move package: `Checkpoint` registry + `Receipt` verification |
 | `enclave/` | Rust gateway (axum), reproducible EIF build |
 | `sdk/` | `@miraicloud/sekisho` — client, receipt verification, PTB helpers |
+| `app/` | Certificate viewer — look up a transaction, see what it proves |
 | `scripts/` | Register, verify a deployment, end-to-end demo |
 | `docs/` | [Spec](docs/SPEC.md), BCS test vectors, research briefs |
 

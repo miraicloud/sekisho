@@ -1,0 +1,440 @@
+/* Sekisho certificate viewer.
+   Aesthetic: an official transit document — ink on aged paper, stamped and
+   counter-signed. The metaphor is the product: papers presented at a
+   checkpoint for inspection. */
+
+:root {
+  --paper: #efe9dc;
+  --paper-deep: #e3dbc9;
+  --ink: #15120d;
+  --ink-soft: #4a4237;
+  --ink-faint: #8c8271;
+  --rule: #c8bda4;
+  --stamp: #a8321e;
+  --seal: #1f5c4d;
+  --warn: #8a5a10;
+
+  --serif: 'Instrument Serif', Georgia, serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --sans: 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Paper grain + a faint guilloche wash, the way security paper is printed. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.5;
+  background-image:
+    repeating-radial-gradient(
+      circle at 18% 12%,
+      transparent 0 22px,
+      rgba(21, 18, 13, 0.028) 22px 23px
+    ),
+    repeating-radial-gradient(
+      circle at 86% 78%,
+      transparent 0 26px,
+      rgba(21, 18, 13, 0.022) 26px 27px
+    );
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.35;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+.shell {
+  position: relative;
+  z-index: 1;
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem 6rem;
+}
+
+/* ── masthead ─────────────────────────────────────────────── */
+
+.masthead {
+  border-bottom: 3px double var(--ink);
+  padding-bottom: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.bureau {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.masthead h1 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(2.4rem, 6vw, 3.9rem);
+  line-height: 1;
+  margin: 0.35rem 0 0.5rem;
+  letter-spacing: -0.015em;
+}
+
+.masthead p {
+  margin: 0;
+  max-width: 46rem;
+  color: var(--ink-soft);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+/* ── lookup ───────────────────────────────────────────────── */
+
+.lookup {
+  display: flex;
+  gap: 0.6rem;
+  margin: 2rem 0 1rem;
+  flex-wrap: wrap;
+}
+
+.lookup input {
+  flex: 1 1 26rem;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  padding: 0.85rem 1rem;
+  color: var(--ink);
+  background: rgba(255, 253, 247, 0.75);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  outline-offset: 2px;
+}
+
+.lookup input:focus-visible {
+  outline: 2px solid var(--ink);
+}
+
+.lookup button {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 0.85rem 1.6rem;
+  color: var(--paper);
+  background: var(--ink);
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+
+.lookup button:hover:not(:disabled) {
+  background: var(--stamp);
+  border-color: var(--stamp);
+}
+
+.lookup button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hint {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+  margin: 0 0 2.5rem;
+}
+
+.hint button {
+  font: inherit;
+  color: var(--stamp);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.notice {
+  border-left: 3px solid var(--stamp);
+  padding: 0.85rem 1rem;
+  background: rgba(168, 50, 30, 0.06);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--ink);
+  margin-bottom: 2rem;
+}
+
+/* ── certificate ──────────────────────────────────────────── */
+
+.certificate {
+  position: relative;
+  border: 1px solid var(--ink);
+  background: rgba(255, 253, 247, 0.7);
+  padding: 2.5rem 2.25rem;
+  box-shadow: 0 1px 0 var(--rule), 0 18px 40px -30px rgba(21, 18, 13, 0.6);
+  animation: rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.certificate::before {
+  content: '';
+  position: absolute;
+  inset: 7px;
+  border: 1px solid var(--rule);
+  pointer-events: none;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+.cert-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.cert-title {
+  font-family: var(--serif);
+  font-size: 2rem;
+  line-height: 1.05;
+  margin: 0;
+  max-width: 26rem;
+}
+
+.cert-sub {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0.5rem 0 0;
+}
+
+/* the stamp */
+.stamp {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--seal);
+  border: 2px solid var(--seal);
+  padding: 0.6rem 0.9rem;
+  transform: rotate(-6deg);
+  text-align: center;
+  line-height: 1.5;
+  opacity: 0.92;
+  animation: stampin 520ms cubic-bezier(0.34, 1.56, 0.64, 1) 260ms both;
+}
+
+.stamp.refused {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.stamp.denied {
+  color: var(--stamp);
+  border-color: var(--stamp);
+}
+
+.stamp strong {
+  display: block;
+  font-size: 1.05rem;
+  letter-spacing: 0.1em;
+}
+
+@keyframes stampin {
+  from {
+    opacity: 0;
+    transform: rotate(-16deg) scale(1.5);
+  }
+}
+
+/* ── sections ─────────────────────────────────────────────── */
+
+section {
+  margin-top: 2.25rem;
+}
+
+.sec-label {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1.1rem 1.75rem;
+}
+
+.field .k {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.field .v {
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  color: var(--ink);
+  word-break: break-all;
+  line-height: 1.45;
+}
+
+.field .v.big {
+  font-family: var(--serif);
+  font-size: 1.45rem;
+  letter-spacing: -0.01em;
+}
+
+/* evidence chain */
+.chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: link;
+}
+
+.chain li {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 1rem;
+  padding: 0.95rem 0;
+  border-bottom: 1px dotted var(--rule);
+}
+
+.chain li::before {
+  counter-increment: link;
+  content: counter(link, decimal-leading-zero);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  padding-top: 0.15rem;
+}
+
+.chain .claim {
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin: 0 0 0.3rem;
+}
+
+.chain .ev {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  word-break: break-all;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.mark {
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid currentColor;
+  margin-left: 0.5rem;
+  white-space: nowrap;
+}
+
+.mark.ok {
+  color: var(--seal);
+}
+
+.mark.warn {
+  color: var(--warn);
+}
+
+.mark.bad {
+  color: var(--stamp);
+}
+
+/* limits block — deliberately the loudest thing on the page after the stamp */
+.limits {
+  margin-top: 2.5rem;
+  border: 1px solid var(--stamp);
+  padding: 1.5rem 1.6rem;
+  background: rgba(168, 50, 30, 0.05);
+}
+
+.limits h3 {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--stamp);
+  margin: 0 0 0.85rem;
+}
+
+.limits p {
+  margin: 0 0 0.7rem;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--ink);
+  max-width: 48rem;
+}
+
+.limits p:last-child {
+  margin-bottom: 0;
+}
+
+.foot {
+  margin-top: 2rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  line-height: 1.7;
+}
+
+.foot a {
+  color: var(--ink-soft);
+}
+
+.skew {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+  margin-top: 0.4rem;
+}
+
+@media (max-width: 640px) {
+  .certificate {
+    padding: 1.75rem 1.15rem;
+  }
+  .cert-title {
+    font-size: 1.6rem;
+  }
+}
