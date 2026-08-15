@@ -6,6 +6,7 @@ export type { SekishoExtensionOptions, BuildVerifyTransactionOptions } from './e
 export {
   RECEIPT_INTENT,
   ReceiptOutcome,
+  parseBlobId,
   serializeReceipt,
   verifyReceipt,
   canonicalJson,

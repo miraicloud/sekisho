@@ -208,3 +208,34 @@ export const hashRequest = hashJson
 
 /** @deprecated Misleading name — see {@link hashJson}. Does not reproduce any receipt hash field. */
 export const hashResponse = hashJson
+
+/**
+ * Parse a `*_blob` field from a gateway's `GET /receipts/:id` JSON into the
+ * u256 the enclave signed.
+ *
+ * The wire format is the blob id's **32 little-endian bytes, hex-encoded** —
+ * the same bytes the enclave feeds to BCS. `BigInt()` cannot parse bare hex
+ * (it throws) and would read big-endian even with an `0x` prefix, so both the
+ * decoding and the byte order have to be explicit here. Decimal strings are
+ * accepted too, since that is how `docs/receipt-vectors.json` encodes them.
+ */
+export function parseBlobId(value: string): bigint {
+  // Order matters: a 64-char hex id can consist entirely of decimal digits, so
+  // "looks numeric" is NOT a safe test for decimal. Disambiguate on the wire
+  // format's fixed width first, then an explicit 0x prefix, and only then fall
+  // back to decimal.
+  const prefixed = value.startsWith('0x')
+  const hex = prefixed ? value.slice(2) : value
+  const isHexChars = /^[0-9a-fA-F]+$/.test(hex)
+
+  if (isHexChars && (prefixed || hex.length === 64)) {
+    let out = 0n
+    // Little-endian: the last byte is the most significant.
+    for (let i = hex.length - 2; i >= 0; i -= 2) {
+      out = (out << 8n) | BigInt(parseInt(hex.slice(i, i + 2), 16))
+    }
+    return out
+  }
+  if (/^[0-9]+$/.test(value)) return BigInt(value)
+  throw new Error(`parseBlobId: not a 32-byte hex or decimal blob id: ${value}`)
+}

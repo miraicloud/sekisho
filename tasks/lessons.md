@@ -40,3 +40,9 @@
   `receipt::verify`, flipping one byte of the receipt was what actually demonstrated the check
   works: the transaction aborted with `EInvalidSignature`. Always pair a positive result with the
   negative case.
+
+- **Don't infer an encoding from the value's shape.** A 32-byte blob id in hex can be entirely
+  decimal digits, so "looks numeric ⇒ decimal" silently returned 10^62 for a hex id. Disambiguate
+  on something structural (fixed wire width, explicit prefix), and throw rather than guess. The
+  test that caught it was one I wrote to assert the *intended* behaviour, not to probe an edge —
+  which is the argument for asserting exact expected values instead of "it returns a bigint".

@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import {
   ReceiptOutcome,
+  parseBlobId,
   serializeReceipt,
   verifyReceipt,
   type Receipt,
@@ -124,12 +125,12 @@ try {
     provider: Number(r.provider),
     endpointHost: r.endpoint_host,
     tlsCertSha256: r.tls_cert_sha256,
-    requestBlob: BigInt(r.request_blob),
-    upstreamRequestBlob: BigInt(r.upstream_request_blob),
+    requestBlob: parseBlobId(r.request_blob),
+    upstreamRequestBlob: parseBlobId(r.upstream_request_blob),
     upstreamHeadersHash: r.upstream_headers_hash,
     modelId: r.model_id,
     providerRequestId: r.provider_request_id,
-    responseBlob: BigInt(r.response_blob),
+    responseBlob: parseBlobId(r.response_blob),
     providerMetaHash: r.provider_meta_hash,
     inputTokens: BigInt(r.input_tokens),
     cacheCreationTokens: BigInt(r.cache_creation_tokens),

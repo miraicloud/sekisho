@@ -7,6 +7,7 @@ import {
   hashResponse,
   type Receipt,
   ReceiptOutcome,
+  parseBlobId,
   serializeReceipt,
   verifyReceipt,
 } from '../src/receipt'
@@ -247,5 +248,33 @@ describe('hashRequest / hashResponse', () => {
     // SHA-256("null") == 74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b
     const h = await hashRequest(null)
     expect(h).toBe('74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b')
+  })
+})
+
+describe('parseBlobId', () => {
+  // Regression: the gateway serves blob ids as hex of the 32 little-endian
+  // bytes. BigInt() throws on bare hex, and would read big-endian even with an
+  // 0x prefix — so a naive BigInt(field) both fails and, once "fixed" with a
+  // prefix, would silently produce a byte-reversed id that fails onchain
+  // verification for a non-obvious reason.
+  test('throws on bare hex via BigInt, which is why this helper exists', () => {
+    expect(() => BigInt('599fd2f0d95e73d48d5c00d6404b9986e746818f30384685f5d05d44435b1b0f')).toThrow()
+  })
+
+  test('decodes little-endian hex to the u256 the enclave signed', () => {
+    // 0x01 in the first (least significant) byte position.
+    expect(parseBlobId('01' + '00'.repeat(31))).toBe(1n)
+    // 0x01 in the last (most significant) byte position.
+    expect(parseBlobId('00'.repeat(31) + '01')).toBe(1n << 248n)
+  })
+
+  test('accepts an 0x prefix and decimal strings', () => {
+    expect(parseBlobId('0x' + '01' + '00'.repeat(31))).toBe(1n)
+    expect(parseBlobId('12345')).toBe(12345n)
+  })
+
+  test('rejects malformed input rather than guessing', () => {
+    expect(() => parseBlobId('zz')).toThrow()
+    expect(() => parseBlobId('abc')).toThrow()
   })
 })
