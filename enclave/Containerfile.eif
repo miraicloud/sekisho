@@ -113,7 +113,12 @@ RUN cargo build --locked --release --target "$TARGET" -p "$ENCLAVE_PACKAGE"
 
 WORKDIR /build_cpio
 ENV KBUILD_BUILD_TIMESTAMP=1
-RUN mkdir -p initramfs/bin initramfs/etc/argonaut
+# Create ONLY the top-level directory. The base layers below own /bin, /etc
+# and friends: pre-creating initramfs/bin as a real directory makes BuildKit
+# fail with "cannot replace to directory ... with file" when core-musl's /bin
+# symlink lands on top of it. Directories we add ourselves are created after
+# the base layers, below.
+RUN mkdir initramfs
 COPY --from=core-busybox . initramfs
 COPY --from=core-musl . initramfs
 COPY --from=core-ca-certificates /etc/ssl/certs initramfs/etc/ssl/certs
@@ -121,6 +126,7 @@ COPY --from=user-nit /bin/init initramfs/init
 COPY --from=argonaut-src /out/argonaut initramfs/bin/argonaut
 RUN cp "/workspace/target/${TARGET}/release/${ENCLAVE_BIN}" initramfs/sekisho-enclave
 RUN cp /workspace/eif/run.sh initramfs/run.sh
+RUN mkdir -p initramfs/etc/argonaut
 # Outbound allowlist + inbound bridge topology: not a secret, deliberately
 # baked in so it's measured into PCR2 (see header comment and eif/run.sh).
 RUN cp /workspace/eif/bridge-config.json initramfs/etc/argonaut/bridge-config.json
