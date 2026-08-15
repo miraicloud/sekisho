@@ -23,3 +23,9 @@
 - **Optional request fields are policy bypasses.** A `max_tokens` cap that only checks requests
   which *specify* `max_tokens` is escapable by omitting the field, since absent means "model
   default" (unbounded). Treat absent-but-capped as a violation.
+
+- **Verify what a measurement actually measures.** The spec claimed baked-in config was "covered
+  by PCR2". The first real build showed PCR2 byte-identical across three unrelated projects —
+  Nautilus passes a single `--ramdisk`, so `eif_build` records no application layer and PCR2 is a
+  constant (and PCR0 collapses to equal PCR1). The binding is real but comes from PCR0. A security
+  property attributed to the wrong mechanism reads as verified when it isn't.

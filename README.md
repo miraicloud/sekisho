@@ -27,6 +27,9 @@ client ──► enclave gateway (attested code, PCR-measured) ──► LLM pro
   receipts from every deployment verify against one shared registry.
 - **Reproducible builds.** Deterministic StageX EIF builds mean a third party can rebuild from a
   git tag and confirm the PCRs match what a live enclave attests and what the chain approved.
+  PCR0 is the value that binds the image; with Nautilus's single-ramdisk layout PCR1 mirrors it
+  and PCR2 is a constant, so never review an approved entry on PCR2 alone — see
+  [`docs/SPEC.md`](docs/SPEC.md), "What the PCRs actually measure".
 - **No secrets in the image.** Provider credentials arrive at boot over VSOCK
   ([argonaut](https://github.com/unconfirmedlabs/argonaut)); provider URLs are compile-time
   constants, so no configuration can redirect the gateway to an impostor endpoint.

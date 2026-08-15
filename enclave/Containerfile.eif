@@ -13,7 +13,9 @@
 # thing baked in here that isn't the app binary itself is the outbound HTTPS
 # allowlist (enclave/eif/bridge-config.json), which is *not* a secret -- it's
 # public policy that we deliberately want PCR-visible so an operator can't
-# silently widen which domains the gateway may reach without changing PCR2.
+# silently widen which domains the gateway may reach without changing PCR0.
+# (PCR0 -- not PCR2: this build passes a single ramdisk, so eif_build leaves
+# PCR2 a constant. See docs/SPEC.md, "What the PCRs actually measure".)
 #
 # argonaut (github.com/unconfirmedlabs/argonaut) is built from source here too,
 # pinned to a fixed commit, and included in the image for VSOCK<->TCP bridging
@@ -128,7 +130,7 @@ RUN cp "/workspace/target/${TARGET}/release/${ENCLAVE_BIN}" initramfs/sekisho-en
 RUN cp /workspace/eif/run.sh initramfs/run.sh
 RUN mkdir -p initramfs/etc/argonaut
 # Outbound allowlist + inbound bridge topology: not a secret, deliberately
-# baked in so it's measured into PCR2 (see header comment and eif/run.sh).
+# baked in so it's measured into PCR0 (see header comment and eif/run.sh).
 RUN cp /workspace/eif/bridge-config.json initramfs/etc/argonaut/bridge-config.json
 RUN chmod +x initramfs/sekisho-enclave initramfs/run.sh initramfs/bin/argonaut
 

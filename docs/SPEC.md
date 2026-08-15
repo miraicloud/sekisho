@@ -106,7 +106,7 @@ Streaming: accumulate SSE deltas into the assembled-response structure, hash tha
 refusals/errors still produce receipts with the right `outcome`.
 
 **Provider endpoints are compile-time constants, never config** (load-bearing security property):
-base URLs for each provider are `const` in the source and therefore covered by PCR2. If they came
+base URLs for each provider are `const` in the source and therefore covered by PCR0. If they came
 from boot config, an operator could point the "anthropic" adapter at a server they control and
 still emit receipts that verify onchain — the attested-relay claim would be worthless. Boot config
 supplies *credentials only*. The outbound HTTPS allowlist is likewise in-image, so any change to
@@ -127,6 +127,27 @@ in the measured image). Delivered by **argonaut's one-shot boot config over VSOC
 (cheap, scripted). Seal two-phase key load is a documented future option, not v1.
 Outbound HTTPS restricted to provider domains via allowlist forwarder (in-image, so allowlist
 changes are PCR-visible — that's a feature).
+
+### What the PCRs actually measure (verified on hardware, 2026-08-15)
+
+Nautilus's `eif_build` invocation passes a **single** `--ramdisk`. AWS treats the first ramdisk as
+the *bootstrap* ramdisk and any later ones as *application* ramdisks, so with one ramdisk there is
+no application layer to measure. Two consequences, both confirmed against real builds of three
+different projects (sekisho, an internal sibling project, nautilus-rust):
+
+- **PCR0 == PCR1.** With a single ramdisk the whole-image and kernel+bootstrap measurements
+  coincide. Not a bug; expected for this build layout.
+- **PCR2 is a constant** — byte-identical across all three unrelated applications
+  (`21b9efbc…fc500a`). It carries no information about the code being run.
+
+So **PCR0 is the measurement that binds the application**: it covers the kernel, the cmdline, and
+the ramdisk containing the enclave binary, `run.sh`, and `bridge-config.json`. Anywhere this spec
+says a baked-in artifact is "PCR-measured", the binding is PCR0.
+
+This does not weaken registration: `checkpoint::register` requires all three PCRs to match an
+approved entry, and PCR0 alone is sufficient to pin the exact image. It does mean an approved-PCR
+entry must never be reviewed on PCR2 alone, and that a future switch to a multi-ramdisk layout
+would change PCR0/1 semantics and require re-approval.
 
 ## 5. Reproducible build + verification
 
