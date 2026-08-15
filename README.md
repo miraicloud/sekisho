@@ -1,12 +1,20 @@
 # Sekisho
 
-Attested AI gateway for [Sui Nautilus](https://docs.sui.io/guides/developer/nautilus). Sekisho
-runs inside an AWS Nitro Enclave, relays requests to LLM providers, and signs an inference
-**Receipt** that any Sui Move contract can verify. (The name comes from the Edo-period checkpoint
-stations that inspected travelers' papers.)
+A framework for **verifiable attestation of LLM request/response exchanges**, built on
+[Sui Nautilus](https://docs.sui.io/guides/developer/nautilus). Sekisho runs inside an AWS Nitro
+Enclave, relays requests to LLM providers, and signs a **Receipt** that any Sui Move contract can
+verify. (The name comes from the Edo-period checkpoint stations that inspected travelers' papers.)
 
-It answers a question a smart contract otherwise cannot ask: *did this AI output really come from
-the model it claims, through code I can audit?*
+It answers a question a smart contract otherwise cannot ask: *what exactly was sent to a model,
+what exactly came back, and was it relayed by code I can rebuild myself?*
+
+**What a Receipt proves:** this exact request left an enclave running exactly this open-source
+code, under exactly this policy, over a TLS channel to a server presenting this certificate for
+this hostname — and this exact response came back.
+
+**What it does not prove:** that the provider ran the model it named. Providers don't sign their
+responses, so the chain of custody ends at their TLS termination. Sekisho attests faithful
+*relay*, not honest *inference* — and says so rather than blurring the line.
 
 ## How it works
 
@@ -32,7 +40,12 @@ client ──► enclave gateway (attested code, PCR-measured) ──► LLM pro
   [`docs/SPEC.md`](docs/SPEC.md), "What the PCRs actually measure".
 - **No secrets in the image.** Provider credentials arrive at boot over VSOCK
   ([argonaut](https://github.com/unconfirmedlabs/argonaut)); provider URLs are compile-time
-  constants, so no configuration can redirect the gateway to an impostor endpoint.
+  constants, so no configuration can redirect the gateway to an impostor endpoint — and the set of
+  reachable providers is therefore fixed at build time and measured into PCR0.
+- **Content-addressed commitments.** Request and response commitments are
+  [Walrus](https://walrus.xyz) blob IDs, computed locally from the canonical bytes. A blob ID both
+  commits to content and addresses it, so a receipt is archival-ready whether or not anyone has
+  paid to store the blob.
 
 ## What a Receipt proves — and what it doesn't
 
