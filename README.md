@@ -121,8 +121,13 @@ exactly. Change the layout and all three test suites fail together — which is 
 
 ## Status
 
-Working and tested end to end, not yet deployed to a network or audited. The Nautilus enclave
-template it builds on is itself explicitly pre-audit.
+Proven end to end on real hardware and Sui testnet: reproducible build → Nitro enclave → AWS
+attestation → onchain registration → a receipt verified in a transaction (and a tampered receipt
+correctly rejected). See [`docs/testnet-demo.md`](docs/testnet-demo.md) for object ids,
+transaction digests, and the four bugs that run exposed.
+
+Not audited, and not yet exercised against a live model provider. The Nautilus enclave template it
+builds on is itself explicitly pre-audit.
 
 ## License
 
