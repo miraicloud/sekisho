@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/certificate.tsx","./src/lib/sui.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/lib/render.ts","./src/lib/sui.ts"],"version":"5.9.3"}

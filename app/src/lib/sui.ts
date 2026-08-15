@@ -126,8 +126,17 @@ function humanError(e: unknown): Error {
   return new Error(raw.replace(/\s+/g, ' ').slice(0, 240))
 }
 
-export async function lookup(digest: string, rpc = DEFAULT_RPC): Promise<LookupResult> {
+/** Emitted as each network step starts, so a caller can show real progress
+ *  rather than a spinner that means nothing. */
+export type Step = (label: string) => void
+
+export async function lookup(
+  digest: string,
+  rpc = DEFAULT_RPC,
+  step: Step = () => {},
+): Promise<LookupResult> {
   const c = client(rpc)
+  step('fetching transaction')
 
   let tx: {
     Transaction?: {
@@ -147,6 +156,7 @@ export async function lookup(digest: string, rpc = DEFAULT_RPC): Promise<LookupR
     throw new Error('this transaction failed — no verification took place')
   }
 
+  step('decoding ReceiptVerified event')
   const event = (t.events ?? []).find((e) => e.eventType.endsWith('::receipt::ReceiptVerified'))
   if (!event) {
     throw new Error('no sekisho ReceiptVerified event in this transaction')
@@ -181,6 +191,7 @@ export async function lookup(digest: string, rpc = DEFAULT_RPC): Promise<LookupR
     verifiedAtMs: String(d.verified_at_ms),
   }
 
+  step('reading gateway object')
   const checks = await crossCheck(c, attestation)
   return { attestation, checks }
 }

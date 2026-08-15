@@ -1,21 +1,20 @@
-/* Sekisho certificate viewer.
-   Restrained technical document: near-white ground, hairline rules, one accent
-   reserved for the trust boundary. Character comes from the type and the
-   spacing, not from ornament. */
+/* Sekisho certificate viewer, as a terminal.
+   An honest terminal: no scanlines, no phosphor glow, no fake CRT curvature.
+   The content is monospace data and pass/fail checks, so the medium is the
+   format rather than a costume worn over a web page. */
 
 :root {
-  --bg: #fbfbf9;
-  --ink: #14140f;
-  --ink-soft: #56564d;
-  --ink-faint: #93938a;
-  --rule: #e2e2dc;
-  --rule-strong: #c9c9c1;
-  --accent: #9c3524;
-  --ok: #2f6152;
+  --bg: #0d0d0c;
+  --fg: #ddddd4;
+  --dim: #6f6f66;
+  --label: #e8e4d6;
+  --value: #b9b9ae;
+  --ok: #7fae6d;
+  --warn: #c99a4b;
+  --bad: #cc6b5a;
+  --sigil: #7fae6d;
 
-  --serif: 'Instrument Serif', Georgia, serif;
-  --mono: 'IBM Plex Mono', ui-monospace, monospace;
-  --sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
 * {
@@ -23,373 +22,115 @@
 }
 
 html,
-body {
+body,
+#root {
   margin: 0;
+  height: 100%;
   background: var(--bg);
-  color: var(--ink);
-  font-family: var(--sans);
+}
+
+body {
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.65;
   -webkit-font-smoothing: antialiased;
 }
 
-.shell {
-  max-width: 54rem;
+/* A faint vignette so the page has depth without pretending to be a CRT. */
+.term {
+  min-height: 100%;
+  padding: 2.5rem clamp(1rem, 4vw, 3.5rem) 4rem;
+  cursor: text;
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, 0.035), transparent 60%),
+    var(--bg);
+}
+
+.scroll {
+  max-width: 96ch;
   margin: 0 auto;
-  padding: 6rem 1.75rem 8rem;
 }
 
-/* ── masthead ─────────────────────────────────────────────── */
-
-.bureau {
-  font-family: var(--mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
+.line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg);
+  /* Hanging indent: a wrapped 96-char PCR would otherwise flow back to column
+     0 and read as a separate line. Continuations align under the evidence
+     column instead. */
+  padding-left: 9ch;
+  text-indent: -9ch;
 }
 
-.masthead h1 {
-  font-family: var(--serif);
-  font-weight: 400;
-  font-size: clamp(2rem, 5vw, 3rem);
-  line-height: 1.05;
-  margin: 0.75rem 0 1rem;
-  letter-spacing: -0.015em;
+.line.dim {
+  color: var(--dim);
 }
-
-.masthead p {
-  margin: 0;
-  max-width: 40rem;
-  color: var(--ink-soft);
-  font-size: 0.94rem;
-  line-height: 1.65;
-}
-
-/* ── lookup ───────────────────────────────────────────────── */
-
-.lookup {
-  display: flex;
-  gap: 0.5rem;
-  margin: 3rem 0 0.9rem;
-  flex-wrap: wrap;
-}
-
-.lookup input {
-  flex: 1 1 24rem;
-  font-family: var(--mono);
-  font-size: 0.86rem;
-  padding: 0.7rem 0;
-  color: var(--ink);
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--rule-strong);
-  border-radius: 0;
-  outline: none;
-  transition: border-color 160ms ease;
-}
-
-.lookup input::placeholder {
-  color: var(--ink-faint);
-}
-
-.lookup input:focus {
-  border-bottom-color: var(--ink);
-}
-
-.lookup button {
-  font-family: var(--mono);
-  font-size: 0.74rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  padding: 0.7rem 1.2rem;
-  color: var(--ink);
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--ink);
-  cursor: pointer;
-  transition: opacity 140ms ease;
-}
-
-.lookup button:hover:not(:disabled) {
-  opacity: 0.55;
-}
-
-.lookup button:disabled {
-  color: var(--ink-faint);
-  border-bottom-color: var(--rule);
-  cursor: default;
-}
-
-.hint {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--ink-faint);
-  margin: 0 0 4rem;
-}
-
-.hint button {
-  font: inherit;
-  color: var(--ink);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  text-decoration-color: var(--rule-strong);
-}
-
-.hint button:hover {
-  text-decoration-color: var(--ink);
-}
-
-.notice {
-  font-family: var(--mono);
-  font-size: 0.8rem;
-  line-height: 1.6;
-  color: var(--accent);
-  margin-bottom: 3rem;
-  max-width: 40rem;
-}
-
-/* ── certificate ──────────────────────────────────────────── */
-
-.certificate {
-  border-top: 1px solid var(--ink);
-  padding-top: 1.75rem;
-  animation: fade 380ms ease both;
-}
-
-@keyframes fade {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
-.cert-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 2rem;
-  flex-wrap: wrap;
-  margin-bottom: 3.5rem;
-}
-
-.cert-title {
-  font-family: var(--mono);
-  font-size: 0.7rem;
+.line.label {
+  color: var(--label);
   font-weight: 500;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  margin: 0;
+  letter-spacing: 0.04em;
 }
-
-.cert-sub {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--ink-faint);
-  margin: 0.4rem 0 0;
+.line.value {
+  color: var(--value);
 }
-
-/* status: a quiet line, not a stamp */
-.status {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+.line.ok {
   color: var(--ok);
+}
+.line.warn {
+  color: var(--warn);
+}
+.line.bad {
+  color: var(--bad);
+}
+
+/* Command echoes read as input, not output. */
+.line:not(.dim):not(.label):not(.value):not(.ok):not(.warn):not(.bad) {
+  color: var(--fg);
+}
+
+.prompt {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  white-space: nowrap;
+  align-items: baseline;
+  gap: 0.6ch;
+  margin-top: 0.2rem;
 }
 
-.status::before {
-  content: '';
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
+.sigil {
+  color: var(--sigil);
+  user-select: none;
 }
 
-.status.refused {
-  color: var(--ink-soft);
-}
-
-.status.denied {
-  color: var(--accent);
-}
-
-/* ── sections ─────────────────────────────────────────────── */
-
-section {
-  margin-bottom: 3.5rem;
-}
-
-.sec-label {
-  font-family: var(--mono);
-  font-size: 0.64rem;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-bottom: 1.5rem;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-  gap: 1.75rem 2rem;
-}
-
-.field .k {
-  font-family: var(--mono);
-  font-size: 0.63rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  display: block;
-  margin-bottom: 0.35rem;
-}
-
-.field .v {
-  font-family: var(--mono);
-  font-size: 0.85rem;
-  color: var(--ink);
-  word-break: break-all;
-  line-height: 1.5;
-}
-
-.field .v.big {
-  font-size: 1.05rem;
-}
-
-/* The headline value shouldn't break mid-token in a narrow grid cell. */
-.field.wide {
-  grid-column: span 2;
-}
-
-@media (max-width: 700px) {
-  .field.wide {
-    grid-column: span 1;
-  }
-}
-
-/* evidence chain */
-.chain {
-  list-style: none;
-  margin: 0;
+.prompt input {
+  flex: 1;
+  font: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  outline: none;
   padding: 0;
+  caret-color: var(--ok);
+  min-width: 4ch;
 }
 
-.chain li {
-  padding: 1.25rem 0;
-  border-top: 1px solid var(--rule);
+.working {
+  color: var(--dim);
+  animation: pulse 1.1s ease-in-out infinite;
 }
 
-.chain li:last-child {
-  border-bottom: 1px solid var(--rule);
-}
-
-.chain .claim {
-  font-size: 0.92rem;
-  line-height: 1.6;
-  margin: 0 0 0.45rem;
-  color: var(--ink);
-  max-width: 44rem;
-}
-
-.chain .ev {
-  font-family: var(--mono);
-  font-size: 0.74rem;
-  color: var(--ink-faint);
-  word-break: break-all;
-  line-height: 1.65;
-  margin: 0;
-}
-
-.mark {
-  font-family: var(--mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-left: 0.6rem;
-  white-space: nowrap;
-}
-
-.mark.ok {
-  color: var(--ok);
-}
-
-.mark.warn {
-  color: var(--ink-soft);
-}
-
-.mark.bad {
-  color: var(--accent);
-}
-
-/* limits — the one place the accent earns its keep */
-.limits {
-  border-left: 1px solid var(--accent);
-  padding-left: 1.5rem;
-  margin-bottom: 3rem;
-}
-
-.limits h3 {
-  font-family: var(--mono);
-  font-size: 0.64rem;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--accent);
-  margin: 0 0 1rem;
-}
-
-.limits p {
-  margin: 0 0 0.85rem;
-  font-size: 0.9rem;
-  line-height: 1.7;
-  color: var(--ink-soft);
-  max-width: 42rem;
-}
-
-.limits p:last-child {
-  margin-bottom: 0;
-}
-
-.limits strong,
-.limits em {
-  color: var(--ink);
-}
-
-.foot {
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--rule);
-  font-family: var(--mono);
-  font-size: 0.7rem;
-  color: var(--ink-faint);
-  line-height: 1.85;
-  word-break: break-all;
-}
-
-.foot code {
-  font-family: var(--mono);
-  color: var(--ink-soft);
-}
-
-.skew {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--ink-faint);
-  margin-top: 1.25rem;
-  line-height: 1.6;
-}
-
-@media (max-width: 640px) {
-  .shell {
-    padding: 3.5rem 1.25rem 5rem;
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
   }
-  .cert-head {
-    margin-bottom: 2.5rem;
+}
+
+/* Selection that suits a terminal rather than the browser default blue. */
+::selection {
+  background: rgba(127, 174, 109, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working {
+    animation: none;
   }
 }

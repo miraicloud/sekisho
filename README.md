@@ -98,9 +98,10 @@ Step-by-step runbooks, including failure modes, live in
 
 ## Reading a certificate
 
-`app/` is a static viewer: paste a transaction digest and it decodes the `ReceiptVerified` event
+`app/` is a static terminal: type `verify <digest>` and it decodes the `ReceiptVerified` event
 from its canonical BCS, cross-checks the gateway and code version against live chain state, and
-renders what the transaction actually proves — alongside an explicit statement of what it doesn't.
+prints what the transaction actually proves as pass/fail checks — alongside an explicit statement
+of what it doesn't. `example` inspects a real attested Claude call; `help` lists the rest.
 
 ```bash
 cd app && bun install && bun run dev
