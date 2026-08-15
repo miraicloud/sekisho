@@ -7,3 +7,8 @@ build/
 *.log
 .DS_Store
 .wrangler/
+
+# Internal-patterns research brief: documents private infra (hayabusa backend
+# URLs, Cloudflare resource ids) that is deliberately gitignored elsewhere.
+# Kept on disk for reference, never committed.
+docs/research/local-patterns.md
