@@ -11,7 +11,8 @@ against Sui testnet from an AWS Nitro host (`c6a.2xlarge`, us-west-1).
 | Package | `0x9faf9346322288c86409e26968fefc77bb6aef1e28075e046e227d092fe56413` |
 | `Checkpoint` (shared) | `0x5482976d7cd08bd69504dee612883260450e393828e4f634a115ccb504544194` |
 | `CheckpointCap` | `0xb0564c76b78cd08740eb0037e83ee752c4c0a968882bd34c4f9cfbbc65f79901` |
-| `Gateway` (shared) | `0x2f415a0f81bc37ee0a03debedad8ef8126f956d2a2755a6f57db4b87c56e1ec3` |
+| `Gateway` (shared, current) | `0xd9b1557d337995c68b31e24893a047741b1feffa65d8a99b283a0b48f841f4ab` |
+| `Gateway` (first registration, destroyed after key rotation) | `0x2f415a0f81bc37ee0a03debedad8ef8126f956d2a2755a6f57db4b87c56e1ec3` |
 | Publisher / operator | `0xd4fdadb380cac4f7c3604caab013d5572e0a062dbb12770ca43c235c250da2b1` |
 
 Enclave measurements (from `make eif`, and identical inside the live attestation document):
@@ -73,5 +74,32 @@ The gateway ran with a policy allowing only `claude-*`, so a request for another
 before any upstream call and still yields a signed receipt — which is how the whole loop is
 exercised without a provider API key.
 
-Still not covered: a live provider call (needs a key), and a second independent build to confirm
-PCR reproducibility.
+## Live provider calls
+
+Re-run with a real Anthropic key in the boot config. Because boot config is delivered once at
+enclave start, adding the key required a fresh enclave — which produced a new ephemeral key
+(`9e80b88f…` → `a1eee11d…`) and therefore a re-registration, incidentally exercising the
+key-rotation runbook. The superseded Gateway was then destroyed by its operator
+(`EqWFvoNYP77VeCZT34nZ7YGyxZjbhqHA2VmT92aTDmP5`).
+
+**Non-streaming** (`claude-haiku-4-5-20251001`): relayed correctly, `outcome=0`, `model_id` read
+back off the response, usage 17 in / 9 out matching the provider, request and response hashes
+distinct, signature verifies against the NSM-attested key, and altering the token count breaks
+verification.
+
+**Streaming**: SSE relayed through to the client (`message_start` → `content_block_delta` × N →
+`message_delta` → `message_stop`, plus `ping`), with usage 16 in / 12 out taken from
+`message_delta` and matching the raw stream exactly. This was the case mocks could not reach:
+real providers split deltas across frames unpredictably, and the receipt hashes the assembled
+response rather than raw SSE bytes.
+
+A receipt from the real non-streaming completion then verified onchain:
+`9XgYGrxUUgvc1V3Wt3b2fYKEpwc9VVu6RbqLxwNu9H4b` — Success.
+
+`verify_deployment` against the rotated gateway reports 7 passed, 0 failed, and one **correct**
+warning: the on-chain `code_ref` is `6caed16` while HEAD has moved to a later commit, because the
+running enclave was built before those fixes landed. That is drift detection working, not a bug.
+
+## Still not covered
+
+A second independent build to confirm PCR reproducibility, and any provider other than Anthropic.
