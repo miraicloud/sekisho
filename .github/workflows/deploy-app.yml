@@ -60,7 +60,21 @@ jobs:
                 https://sekisho.mirai.cloud/cert/CEPZgWZ6R9ZyuvSbwepDEytfvfv6C4aZKLXzxCTcQs3d || echo 000)
               [ "$cert" = "200" ] || { echo "/cert/<digest> returned $cert" >&2; exit 1; }
               grep -q 'id="root"' /tmp/cert.html || { echo "/cert/ served unexpected body" >&2; exit 1; }
-              echo "sekisho.mirai.cloud serves / and /cert/<digest>" && exit 0
+
+              # Serving the HTML is not enough. If asset URLs are relative, a
+              # nested route resolves them under /cert/, the SPA fallback
+              # answers with index.html, and the page renders blank while every
+              # HTTP check above still passes. Fetch the script the certificate
+              # page actually references and confirm it is JavaScript.
+              asset=$(grep -oE 'src="[^"]*assets/[^"]*\.js"' /tmp/cert.html | head -1 | sed 's/.*src="//;s/"$//')
+              [ -n "$asset" ] || { echo "no script tag found in /cert/ html" >&2; exit 1; }
+              case "$asset" in /*) url="https://sekisho.mirai.cloud$asset" ;; *) url="https://sekisho.mirai.cloud/cert/$asset" ;; esac
+              ctype=$(curl -sS -o /dev/null -w '%{content_type}' "$url" || echo none)
+              case "$ctype" in
+                *javascript*) : ;;
+                *) echo "asset $url served as '$ctype', expected JavaScript" >&2; exit 1 ;;
+              esac
+              echo "sekisho.mirai.cloud serves / and /cert/<digest>, and its assets load" && exit 0
             fi
             echo "attempt $i: HTTP $code, retrying"; sleep 15
           done
