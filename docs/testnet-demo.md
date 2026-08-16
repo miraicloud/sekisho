@@ -135,7 +135,7 @@ A real Claude call (`claude-haiku-4-5-20251001`) relayed through the enclave, ve
 |---|---|
 | `approve_pcrs` | `5xYekGoT3ywVWPuPkE74Fd9N6yZYUxeZBRwTL8wV8Wf1` |
 | `register` (nonce-bound) | Gateway `0x2f35c6bf…` |
-| **`receipt::verify` — attested LLM interaction** | **`CEPZgWZ6R9ZyuvSbwepDEytfvfv6C4aZKLXzxCTcQs3d`** — Success |
+| **`receipt::verify` — attested LLM interaction** | **`CEPZgWZ6R9ZyuvSbwepDEytfvfv6C4aZKLXzxCTcQs3d`** — Success · [view certificate](https://sekisho.mirai.cloud/cert/CEPZgWZ6R9ZyuvSbwepDEytfvfv6C4aZKLXzxCTcQs3d) |
 | `receipt::verify` (tampered: input_tokens 13→14) | `WX4Voxyw1uTckHdrDNSi5D8NbHruShQbzQg876Mx1cR` — aborted, `EInvalidSignature` |
 
 What the emitted `ReceiptVerified` event carried:

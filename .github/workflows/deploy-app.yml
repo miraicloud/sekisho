@@ -53,9 +53,14 @@ jobs:
           for i in $(seq 1 10); do
             code=$(curl -sS -o /tmp/body.html -w '%{http_code}' https://sekisho.mirai.cloud/ || echo 000)
             if [ "$code" = "200" ]; then
-              grep -q 'id="root"' /tmp/body.html \
-                && echo "sekisho.mirai.cloud served the app" && exit 0
-              echo "200 but unexpected body" >&2 && exit 1
+              grep -q 'id="root"' /tmp/body.html || { echo "200 but unexpected body" >&2; exit 1; }
+              # A certificate URL must also serve the app: the SPA fallback is
+              # what makes /cert/<digest> shareable, and it fails silently.
+              cert=$(curl -sS -o /tmp/cert.html -w '%{http_code}' \
+                https://sekisho.mirai.cloud/cert/CEPZgWZ6R9ZyuvSbwepDEytfvfv6C4aZKLXzxCTcQs3d || echo 000)
+              [ "$cert" = "200" ] || { echo "/cert/<digest> returned $cert" >&2; exit 1; }
+              grep -q 'id="root"' /tmp/cert.html || { echo "/cert/ served unexpected body" >&2; exit 1; }
+              echo "sekisho.mirai.cloud serves / and /cert/<digest>" && exit 0
             fi
             echo "attempt $i: HTTP $code, retrying"; sleep 15
           done

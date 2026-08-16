@@ -5,6 +5,11 @@ import { loadCheckpoint, lookup } from './lib/sui'
 const EXAMPLE = 'CEPZgWZ6R9ZyuvSbwepDEytfvfv6C4aZKLXzxCTcQs3d'
 const CHECKPOINT = '0x14e1a8cb5aeb0b52f04ed1d05d0e8f44e75644a644acc70be1613c3fb5075553'
 
+/** A certificate is addressed as `/cert/<digest>`. */
+function digestFromLocation(): string | null {
+  return window.location.pathname.match(/^\/cert\/([A-Za-z0-9]+)\/?$/)?.[1] ?? null
+}
+
 const BANNER: Line[] = [
   { text: 'sekisho — attested inference registry', tone: 'label' },
   { text: 'sui testnet · read-only · no backend', tone: 'dim' },
@@ -64,7 +69,7 @@ export default function App() {
           tone: 'dim',
         })
         push({ text: '' })
-        window.location.hash = digest
+        window.history.pushState({}, '', `/cert/${digest}`)
       } catch (e) {
         push({ text: '' })
         push({ text: `  error: ${e instanceof Error ? e.message : String(e)}`, tone: 'bad' })
@@ -117,10 +122,17 @@ export default function App() {
     [push, verify],
   )
 
-  // Deep link: /#<digest>
+  // Deep link on load, and follow browser history.
   useEffect(() => {
-    const fromHash = window.location.hash.replace(/^#/, '')
-    if (fromHash) void run(`verify ${fromHash}`)
+    const initial = digestFromLocation()
+    if (initial) void run(`verify ${initial}`)
+
+    const onPop = () => {
+      const d = digestFromLocation()
+      if (d) void run(`verify ${d}`)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
     // run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

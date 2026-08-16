@@ -108,6 +108,13 @@ from its canonical BCS, cross-checks the gateway and code version against live c
 prints what the transaction actually proves as pass/fail checks — alongside an explicit statement
 of what it doesn't. `example` inspects a real attested Claude call; `help` lists the rest.
 
+Live at **[sekisho.mirai.cloud](https://sekisho.mirai.cloud)**. A certificate is shareable as a
+URL:
+
+```
+https://sekisho.mirai.cloud/cert/<transaction-digest>
+```
+
 ```bash
 cd app && bun install && bun run dev
 ```
