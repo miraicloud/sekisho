@@ -15,3 +15,6 @@ docs/research/local-patterns.md
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# Wrangler local state
+.wrangler/

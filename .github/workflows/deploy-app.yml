@@ -1,0 +1,63 @@
+name: Deploy app
+
+# Publishes the certificate viewer to Cloudflare Workers at sekisho.mirai.cloud.
+# The Worker is assets-only — there is no server side and it holds no secrets,
+# so a deploy publishes static files and nothing else.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/deploy-app.yml'
+  workflow_dispatch: {}
+
+# Never let two deploys race to the same Worker; queue instead of cancelling,
+# so an in-flight deploy is allowed to finish rather than leaving a half state.
+concurrency:
+  group: deploy-app
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build and deploy to Cloudflare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: install
+        run: bun install
+        working-directory: app
+
+      # `bun run build` is `tsc -b && vite build`, so a type error fails the
+      # deploy rather than shipping a broken bundle.
+      - name: build
+        run: bun run build
+        working-directory: app
+
+      - name: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: app
+          command: deploy
+
+      - name: smoke check the deployed site
+        run: |
+          set -euo pipefail
+          # Give the route a moment to propagate on a first-time custom domain.
+          for i in $(seq 1 10); do
+            code=$(curl -sS -o /tmp/body.html -w '%{http_code}' https://sekisho.mirai.cloud/ || echo 000)
+            if [ "$code" = "200" ]; then
+              grep -q 'id="root"' /tmp/body.html \
+                && echo "sekisho.mirai.cloud served the app" && exit 0
+              echo "200 but unexpected body" >&2 && exit 1
+            fi
+            echo "attempt $i: HTTP $code, retrying"; sleep 15
+          done
+          echo "site did not become reachable" >&2
+          exit 1

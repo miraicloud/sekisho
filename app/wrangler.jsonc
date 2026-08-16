@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sekisho",
+  "compatibility_date": "2026-08-16",
+
+  // Assets-only Worker: there is no server side. The viewer talks straight to
+  // a public Sui fullnode over gRPC from the browser, so nothing here holds a
+  // secret, terminates a request, or needs to be trusted.
+  "assets": {
+    "directory": "./dist",
+    // Deep links are hash-based (`/#<digest>`), so every path serves the same
+    // document; this also covers anyone hand-typing a sub-path.
+    "not_found_handling": "single-page-application"
+  },
+
+  // Requires the `mirai.cloud` zone to exist in the Cloudflare account the
+  // deploy token is scoped to. Wrangler creates the DNS record for a
+  // custom_domain route on first deploy.
+  "routes": [{ "pattern": "sekisho.mirai.cloud", "custom_domain": true }],
+
+  "observability": { "enabled": true }
+}
